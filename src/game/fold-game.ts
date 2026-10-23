@@ -125,8 +125,6 @@ export class FoldGame {
 
     world.renderer.xr.addEventListener('sessionstart', () => this.onSessionStart());
     world.onXRFrame((frame) => this.onXRFrame(frame));
-
-    this.loadLevel(0);
   }
 
   private addButton(kind: IconKind, x: number, y: number, action: () => void) {

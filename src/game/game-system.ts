@@ -1,6 +1,7 @@
 /**
  * Wires the folding game into the IWSDK world: creates it, keeps the mat in
- * a comfortable place, and steps it every frame.
+ * a comfortable place, runs the reveal of each new creature, and steps
+ * everything every frame.
  */
 
 import {
@@ -12,22 +13,38 @@ import {
   VisibilityState,
   XRPlane,
 } from '@iwsdk/core';
+import { paperBounds } from '../fold/paper.js';
+import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
+import { Level, LEVELS, LOOKS } from './levels.js';
+import { Menagerie } from './menagerie.js';
 import {
   floatingPlacement,
   Placement,
   PlaneInfo,
   tablePlacement,
 } from './placement.js';
+import { RoomFrame, safeGet, safeSet, surfacesFromPlanes } from './room.js';
 
 /** Where the mat rests in the flat browser view. */
 const DESKTOP_POSITION = new Vector3(0, 0.74, -0.42);
+const PROGRESS_KEY = 'foldlings.progress.v1';
+
+interface Progress {
+  level: number;
+  solved: string[];
+}
 
 export class GameSystem extends createSystem({
   planes: { required: [XRPlane] },
 }) {
   game!: FoldGame;
+  private room!: RoomFrame;
+  private zoo!: Menagerie;
+  private progress: Progress = { level: 0, solved: [] };
   private sessionTime = -1;
+  private desktopTime = 0;
+  private surfaceClock = 0;
   private placed: Placement | null = null;
   private moveFrom = new Vector3();
   private moveTo = new Vector3();
@@ -35,6 +52,8 @@ export class GameSystem extends createSystem({
   private yawTo = 0;
   private moveT = 1;
   private up = new Vector3(0, 1, 0);
+  private celebrate: { t: number; level: Level; revealed: boolean } | null = null;
+  private galleryItems: Creature[] = [];
 
   init(): void {
     // Soft room light for the mat, buttons and creatures.
@@ -43,14 +62,41 @@ export class GameSystem extends createSystem({
     sun.position.set(0.6, 2, 0.8);
     this.world.scene.add(hemi, sun);
 
+    try {
+      const p = JSON.parse(safeGet(PROGRESS_KEY) ?? 'null') as Progress | null;
+      if (p && typeof p.level === 'number') this.progress = p;
+    } catch {
+      /* fresh start */
+    }
+
+    this.room = new RoomFrame(this.world);
+    this.zoo = new Menagerie(this.world, this.room);
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
+      onSolved: (level) => {
+        this.celebrate = { t: 0, level, revealed: false };
+      },
     });
+    this.game.loadLevel(this.progress.level);
     this.game.boardRoot.position.copy(DESKTOP_POSITION);
+
     if (import.meta.env.DEV) {
       // Test hook: board point (u, v, height) → world position.
       (window as unknown as Record<string, unknown>).__foldlings = {
         game: this.game,
+        zoo: this.zoo,
+        world: this.world,
+        gallery: () => {
+          const kinds = ['crane', 'frog', 'fox', 'fish', 'butterfly', 'boat', 'rabbit', 'whale'] as const;
+          kinds.forEach((k, i) => {
+            const c = new Creature(k, LOOKS[i % LOOKS.length]);
+            c.root.position.set(-0.27 + (i % 4) * 0.18, i < 4 ? 1.1 : 0.92, -1);
+            c.root.rotation.set(0.35, 0.7, 0);
+            this.world.scene.add(c.root);
+            this.galleryItems.push(c);
+          });
+          this.game.hidePaper(true);
+        },
         boardWorld: (u: number, v: number, h = 0) => {
           this.game.boardRoot.updateWorldMatrix(true, false);
           return new Vector3(u, h, -v).applyMatrix4(this.game.boardRoot.matrixWorld).toArray();
@@ -63,6 +109,7 @@ export class GameSystem extends createSystem({
     });
     this.world.renderer.xr.addEventListener('sessionend', () => {
       this.sessionTime = -1;
+      this.desktopTime = 0;
       this.placed = null;
       this.game.boardRoot.position.copy(DESKTOP_POSITION);
       this.game.boardRoot.quaternion.identity();
@@ -93,11 +140,51 @@ export class GameSystem extends createSystem({
     this.yawTo = next.yaw;
     this.moveT = 0;
     this.placed = next;
-    console.info('[foldlings] mat placed:', next.label, next.position.toArray().map((v) => v.toFixed(2)).join(', '));
+    console.info(
+      '[foldlings] mat placed:',
+      next.label,
+      next.position.toArray().map((v) => v.toFixed(2)).join(', '),
+    );
+  }
+
+  private boardWorld(): Vector3 {
+    return this.game.boardRoot.getWorldPosition(new Vector3());
+  }
+
+  private saveProgress() {
+    safeSet(PROGRESS_KEY, JSON.stringify(this.progress));
+  }
+
+  private updateCelebration(dt: number) {
+    const c = this.celebrate!;
+    c.t += dt;
+    if (!c.revealed && c.t > 0.9) {
+      c.revealed = true;
+      const b = paperBounds(this.game.paper);
+      const from = new Vector3((b.minX + b.maxX) / 2, 0.025, -(b.minY + b.maxY) / 2);
+      this.game.boardRoot.localToWorld(from);
+      this.game.hidePaper(true);
+      this.zoo.reveal(
+        c.level.creature,
+        Math.max(0, LOOKS.indexOf(c.level.look)),
+        from,
+        this.boardWorld(),
+      );
+      if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
+      this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
+      this.saveProgress();
+    }
+    if (c.t > 2.6) {
+      this.celebrate = null;
+      this.game.loadLevel(this.progress.level);
+      this.game.hidePaper(false);
+    }
   }
 
   update(delta: number, time: number): void {
     if (this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
+    const frame = this.world.session ? this.world.renderer.xr.getFrame() : null;
+    this.room.update(frame, delta);
     if (this.sessionTime >= 0) {
       this.sessionTime += delta;
       // First placement once the head pose has settled, then upgrade to a
@@ -107,6 +194,17 @@ export class GameSystem extends createSystem({
         const table = tablePlacement(this.player.head, this.planeInfos());
         if (table) this.place(false);
       }
+      this.surfaceClock -= delta;
+      if (this.surfaceClock <= 0) {
+        this.surfaceClock = 1;
+        this.zoo.setSurfaces(surfacesFromPlanes(this.planeInfos()));
+      }
+      if (this.room.ready && this.sessionTime > 2.5 && this.moveT >= 1) {
+        this.zoo.restore(this.boardWorld(), true);
+      }
+    } else {
+      this.desktopTime += delta;
+      if (this.desktopTime > 0.5) this.zoo.restore(this.boardWorld(), false);
     }
     if (this.moveT < 1) {
       this.moveT = Math.min(1, this.moveT + delta / 0.6);
@@ -115,6 +213,9 @@ export class GameSystem extends createSystem({
       root.position.lerpVectors(this.moveFrom, this.moveTo, e);
       root.quaternion.setFromAxisAngle(this.up, this.yawFrom + (this.yawTo - this.yawFrom) * e);
     }
+    if (this.celebrate) this.updateCelebration(delta);
     this.game.update(delta, time);
+    this.zoo.update(delta);
+    for (const c of this.galleryItems) c.update(delta);
   }
 }
