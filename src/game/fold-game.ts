@@ -6,7 +6,10 @@
 import {
   Entity,
   Group,
+  Mesh,
+  MeshBasicMaterial,
   Plane,
+  RingGeometry,
   PokeInteractable,
   Ray,
   RayInteractable,
@@ -28,6 +31,7 @@ import {
   FoldSpec,
   foldPaper,
   initialPaper,
+  paperBounds,
   PaperState,
   rasterize,
   rasterMatch,
@@ -69,6 +73,8 @@ const NEAR_MARGIN = 0.025;
 export interface FoldGameEvents {
   onSolved?: (level: Level, paper: PaperState, boardRoot: Group) => void;
   onRecenter?: () => void;
+  onDaily?: () => void;
+  onSound?: () => void;
 }
 
 export class FoldGame {
@@ -104,6 +110,7 @@ export class FoldGame {
 
   private tmp = new Vector3();
   private tmp2 = new Vector3();
+  private cursors: Mesh[] = [];
   private plane = new Plane();
   private ray = new Ray();
 
@@ -129,13 +136,36 @@ export class FoldGame {
     target.addEventListener('pointerup', (e) => this.onRayUp(e));
     target.addEventListener('pointercancel', (e) => this.onRayUp(e));
 
-    this.addButton('undo', 0.29, 0.1, () => this.undo());
-    this.addButton('restart', 0.29, 0.02, () => this.restart());
-    this.addButton('hint', 0.29, -0.06, () => this.hint());
-    this.addButton('recenter', 0.29, -0.14, () => this.events.onRecenter?.());
+    // Most-used tokens sit nearest the player.
+    this.addButton('undo', 0.295, -0.12, () => this.undo());
+    this.addButton('hint', 0.295, -0.03, () => this.hint());
+    this.addButton('restart', 0.295, 0.06, () => this.restart());
+    this.addButton('daily', -0.295, -0.12, () => this.events.onDaily?.());
+    this.addButton('sound', -0.295, -0.03, () => this.events.onSound?.());
+    this.addButton('recenter', -0.295, 0.06, () => this.events.onRecenter?.());
+
+    const ring = new RingGeometry(0.008, 0.011, 32);
+    ring.rotateX(-Math.PI / 2);
+    for (let i = 0; i < 2; i++) {
+      const c = new Mesh(
+        ring,
+        new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, depthTest: false }),
+      );
+      c.renderOrder = 70;
+      c.visible = false;
+      this.cursors.push(c);
+      this.boardRoot.add(c);
+    }
 
     world.renderer.xr.addEventListener('sessionstart', () => this.onSessionStart());
+    world.renderer.xr.addEventListener('sessionend', () => {
+      for (const c of this.cursors) c.visible = false;
+    });
     world.onXRFrame((frame) => this.onXRFrame(frame));
+  }
+
+  button(kind: IconKind): Button | undefined {
+    return this.buttons.find((b) => b.kind === kind);
   }
 
   private addButton(kind: IconKind, x: number, y: number, action: () => void) {
@@ -422,9 +452,54 @@ export class FoldGame {
 
   private onXRFrame(frame: XRFrame) {
     const d = this.drag;
-    if (!d || d.kind !== 'near' || !d.source) return;
-    const world = this.sourcePoint(frame, d.source, this.tmp);
-    if (world) this.toBoard(world, d.hand);
+    if (d && d.kind === 'near' && d.source) {
+      const world = this.sourcePoint(frame, d.source, this.tmp);
+      if (world) this.toBoard(world, d.hand);
+    }
+    this.updateCursors(frame);
+  }
+
+  /**
+   * A soft ring under each hand shows where a pinch would take hold of the
+   * paper; it tightens as the fingers close and turns gold when in reach.
+   */
+  private updateCursors(frame: XRFrame) {
+    const session = frame.session;
+    let used = 0;
+    const ref = this.world.renderer.xr.getReferenceSpace();
+    if (ref && !this.solved && !this.inputLocked) {
+      for (const source of session.inputSources) {
+        if (!source.hand || used >= this.cursors.length) continue;
+        if (this.drag?.source === source) continue;
+        const thumb = source.hand.get('thumb-tip');
+        const index = source.hand.get('index-finger-tip');
+        if (!thumb || !index || !frame.getJointPose) continue;
+        const a = frame.getJointPose(thumb, ref);
+        const b = frame.getJointPose(index, ref);
+        if (!a || !b) continue;
+        const ta = a.transform.position;
+        const tb = b.transform.position;
+        const gap = Math.hypot(ta.x - tb.x, ta.y - tb.y, ta.z - tb.z);
+        this.tmp.set((ta.x + tb.x) / 2, (ta.y + tb.y) / 2, (ta.z + tb.z) / 2);
+        this.world.player.updateWorldMatrix(true, false);
+        this.tmp.applyMatrix4(this.world.player.matrixWorld);
+        const hand: Point3 = { x: 0, y: 0, h: 0 };
+        this.toBoard(this.tmp, hand);
+        if (hand.h > 0.14 || hand.h < -0.03) continue;
+        const p = this.grabPoint(hand);
+        if (!p) continue;
+        const c = this.cursors[used++];
+        c.visible = true;
+        c.position.set(p.x, 0.012, -p.y);
+        const near = hand.h < NEAR_HEIGHT;
+        const s = 0.6 + Math.min(1, gap / 0.06) * 0.9;
+        c.scale.setScalar(s);
+        const m = c.material as MeshBasicMaterial;
+        m.color.set(near ? 0xffd166 : 0xffffff);
+        m.opacity = near ? 0.95 : 0.5;
+      }
+    }
+    for (let i = used; i < this.cursors.length; i++) this.cursors[i].visible = false;
   }
 
   // ---------------------------------------------------------------- update
@@ -433,6 +508,7 @@ export class FoldGame {
     this.time = time;
     for (const b of this.buttons) b.update(dt);
     this.updateGuide(dt);
+    this.updateVanish(dt);
     if (this.drag) this.updateDrag(dt);
     if (this.settle) this.updateSettle(dt);
     this.glow = Math.max(0, this.glow - dt * 1.2);
@@ -542,6 +618,30 @@ export class FoldGame {
 
   hidePaper(hidden: boolean) {
     this.paperView.root.visible = !hidden;
+    this.paperView.root.scale.setScalar(1);
+    this.paperView.root.position.set(0, 0, 0);
+    this.vanish = -1;
+  }
+
+  /** Paper lifts, spins and shrinks into the spot where a creature appears. */
+  vanishPaper() {
+    this.vanish = 0;
+    const b = paperBounds(this.paper);
+    this.vanishCenter.set((b.minX + b.maxX) / 2, 0, -(b.minY + b.maxY) / 2);
+  }
+  private vanish = -1;
+  private vanishCenter = new Vector3();
+
+  private updateVanish(dt: number) {
+    if (this.vanish < 0) return;
+    this.vanish = Math.min(1, this.vanish + dt / 0.35);
+    const e = this.vanish * this.vanish;
+    const r = this.paperView.root;
+    const s = Math.max(0.001, 1 - e);
+    r.scale.set(s, 1, s);
+    // Shrink towards the centre of the folded shape and rise a little.
+    r.position.set(this.vanishCenter.x * (1 - s), e * 0.03, this.vanishCenter.z * (1 - s));
+    if (this.vanish >= 1) r.visible = false;
   }
 }
 

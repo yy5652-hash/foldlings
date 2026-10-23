@@ -155,3 +155,79 @@ export const sfx = {
     tone(300, 0.2, 0.05, 0.05);
   },
 };
+
+// ------------------------------------------------------------ ambient music
+
+let musicTimer: number | null = null;
+let musicBus: GainNode | null = null;
+let muted = false;
+const SCALE = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25];
+
+function pluck(freq: number, when: number, gain: number) {
+  const a = audio();
+  if (!a || !musicBus) return;
+  const o = a.createOscillator();
+  o.type = 'triangle';
+  o.frequency.value = freq;
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(2400, when);
+  lp.frequency.exponentialRampToValueAtTime(500, when + 1.2);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, when);
+  g.gain.exponentialRampToValueAtTime(gain, when + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 2.2);
+  o.connect(lp).connect(g).connect(musicBus);
+  o.start(when);
+  o.stop(when + 2.4);
+}
+
+/** Soft generative koto-like notes with an echo; very quiet. */
+export function startMusic() {
+  const a = audio();
+  if (!a || !master || musicTimer !== null) return;
+  if (!musicBus) {
+    musicBus = a.createGain();
+    musicBus.gain.value = muted ? 0 : 0.5;
+    const delay = a.createDelay(1);
+    delay.delayTime.value = 0.42;
+    const fb = a.createGain();
+    fb.gain.value = 0.35;
+    const wet = a.createGain();
+    wet.gain.value = 0.4;
+    musicBus.connect(master);
+    musicBus.connect(delay);
+    delay.connect(fb).connect(delay);
+    delay.connect(wet).connect(master);
+  }
+  let step = 0;
+  const tick = () => {
+    const ctx = audio();
+    if (!ctx) return;
+    const t = ctx.currentTime + 0.05;
+    // A slow phrase: mostly rests, a note or two each beat.
+    if (Math.random() < 0.55) {
+      const root = step % 16 < 8 ? 0 : 2;
+      const n = SCALE[(root + Math.floor(Math.random() * 5)) % SCALE.length];
+      pluck(n / (Math.random() < 0.3 ? 2 : 1), t, 0.05);
+      if (Math.random() < 0.25) pluck(n * 1.5, t + 0.21, 0.025);
+    }
+    step++;
+  };
+  musicTimer = window.setInterval(tick, 900);
+}
+
+export function stopMusic() {
+  if (musicTimer !== null) window.clearInterval(musicTimer);
+  musicTimer = null;
+}
+
+export function setMuted(m: boolean) {
+  muted = m;
+  if (master) master.gain.value = m ? 0 : 0.8;
+  if (musicBus) musicBus.gain.value = m ? 0 : 0.5;
+}
+
+export function isMuted(): boolean {
+  return muted;
+}

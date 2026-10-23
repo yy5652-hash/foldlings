@@ -17,7 +17,8 @@ import {
 import { paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
-import { Level, LEVELS, LOOKS } from './levels.js';
+import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
+import { isMuted, setMuted, startMusic } from './sfx.js';
 import { Menagerie } from './menagerie.js';
 import {
   floatingPlacement,
@@ -35,6 +36,9 @@ const PROGRESS_KEY = 'foldlings.progress.v1';
 interface Progress {
   level: number;
   solved: string[];
+  /** Day numbers on which the daily fold was solved. */
+  daily?: number[];
+  muted?: boolean;
 }
 
 export class GameSystem extends createSystem({
@@ -54,7 +58,7 @@ export class GameSystem extends createSystem({
   private yawTo = 0;
   private moveT = 1;
   private up = new Vector3(0, 1, 0);
-  private celebrate: { t: number; level: Level; revealed: boolean } | null = null;
+  private celebrate: { t: number; level: Level; revealed: boolean; vanished: boolean } | null = null;
   private galleryItems: Creature[] = [];
   private vroom!: VirtualRoom;
   private desk!: Group;
@@ -82,9 +86,20 @@ export class GameSystem extends createSystem({
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
       onSolved: (level) => {
-        this.celebrate = { t: 0, level, revealed: false };
+        this.celebrate = { t: 0, level, revealed: false, vanished: false };
+      },
+      onDaily: () => this.toggleDaily(),
+      onSound: () => {
+        setMuted(!isMuted());
+        this.progress.muted = isMuted();
+        this.game.button('sound')?.setIcon(isMuted() ? 'mute' : 'sound');
+        this.saveProgress();
       },
     });
+    if (this.progress.muted) {
+      setMuted(true);
+      this.game.button('sound')?.setIcon('mute');
+    }
     this.game.loadLevel(this.progress.level);
     this.game.boardRoot.position.copy(DESKTOP_POSITION);
     this.desk = makeDesk();
@@ -115,6 +130,7 @@ export class GameSystem extends createSystem({
       };
     }
     this.world.renderer.xr.addEventListener('sessionstart', () => {
+      startMusic();
       this.sessionTime = 0;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
@@ -181,6 +197,32 @@ export class GameSystem extends createSystem({
     );
   }
 
+  private streak(): number {
+    const days = new Set(this.progress.daily ?? []);
+    let d = dayNumber();
+    if (!days.has(d)) d--;
+    let n = 0;
+    while (days.has(d)) {
+      n++;
+      d--;
+    }
+    return n;
+  }
+
+  private toggleDaily() {
+    if (this.game.isDaily) {
+      this.game.loadLevel(this.progress.level);
+      this.game.button('daily')?.setIcon('daily');
+      return;
+    }
+    const today = dayNumber();
+    const done = (this.progress.daily ?? []).includes(today);
+    const n = this.streak();
+    const sub = done ? `Solved today · ${n}-day streak` : n > 0 ? `${n}-day streak` : 'A new fold every day';
+    this.game.loadDaily(dailyLevel(today), sub);
+    this.game.button('daily')?.setIcon('back');
+  }
+
   private boardWorld(): Vector3 {
     return this.game.boardRoot.getWorldPosition(new Vector3());
   }
@@ -192,26 +234,39 @@ export class GameSystem extends createSystem({
   private updateCelebration(dt: number) {
     const c = this.celebrate!;
     c.t += dt;
-    if (!c.revealed && c.t > 0.9) {
+    if (!c.vanished && c.t > 0.75) {
+      c.vanished = true;
+      this.game.vanishPaper();
+    }
+    if (!c.revealed && c.t > 1.0) {
       c.revealed = true;
       const b = paperBounds(this.game.paper);
       const from = new Vector3((b.minX + b.maxX) / 2, 0.025, -(b.minY + b.maxY) / 2);
       this.game.boardRoot.localToWorld(from);
-      this.game.hidePaper(true);
       this.zoo.reveal(
         c.level.creature,
         Math.max(0, LOOKS.indexOf(c.level.look)),
         from,
         this.boardWorld(),
       );
-      if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
-      this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
+      if (this.game.isDaily) {
+        const days = new Set(this.progress.daily ?? []);
+        days.add(dayNumber());
+        this.progress.daily = [...days].sort((a, b) => a - b).slice(-120);
+      } else {
+        if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
+        this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
+      }
       this.saveProgress();
     }
     if (c.t > 2.6) {
       this.celebrate = null;
       this.game.loadLevel(this.progress.level);
+      this.game.button('daily')?.setIcon('daily');
       this.game.hidePaper(false);
+      // Nudge towards today's fold once the basics are learned.
+      const doneToday = (this.progress.daily ?? []).includes(dayNumber());
+      if (!doneToday && this.progress.solved.length >= 3) this.game.button('daily')?.pulse(4);
     }
   }
 

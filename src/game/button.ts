@@ -15,9 +15,9 @@ import {
   SRGBColorSpace,
 } from '@iwsdk/core';
 
-export type IconKind = 'undo' | 'restart' | 'hint' | 'next' | 'daily' | 'recenter';
+export type IconKind = 'undo' | 'restart' | 'hint' | 'next' | 'daily' | 'recenter' | 'sound' | 'mute' | 'back';
 
-const RADIUS = 0.024;
+const RADIUS = 0.026;
 
 function drawIcon(kind: IconKind): CanvasTexture {
   const c = document.createElement('canvas');
@@ -87,6 +87,40 @@ function drawIcon(kind: IconKind): CanvasTexture {
         g.stroke();
       }
       break;
+    case 'sound':
+    case 'mute':
+      g.beginPath();
+      g.moveTo(70, 108);
+      g.lineTo(100, 108);
+      g.lineTo(136, 76);
+      g.lineTo(136, 180);
+      g.lineTo(100, 148);
+      g.lineTo(70, 148);
+      g.closePath();
+      g.fill();
+      if (kind === 'sound') {
+        g.beginPath();
+        g.arc(140, 128, 34, -0.8, 0.8);
+        g.stroke();
+        g.beginPath();
+        g.arc(140, 128, 62, -0.8, 0.8);
+        g.stroke();
+      } else {
+        g.beginPath();
+        g.moveTo(156, 100);
+        g.lineTo(204, 156);
+        g.moveTo(204, 100);
+        g.lineTo(156, 156);
+        g.stroke();
+      }
+      break;
+    case 'back':
+      g.beginPath();
+      g.moveTo(150, 72);
+      g.lineTo(96, 128);
+      g.lineTo(150, 184);
+      g.stroke();
+      break;
     case 'recenter':
       g.beginPath();
       g.arc(128, 128, 50, 0, Math.PI * 2);
@@ -108,6 +142,7 @@ export class Button {
   private lastFire = -1;
   private clock = 0;
   private face: MeshBasicMaterial;
+  private icons = new Map<IconKind, CanvasTexture>();
 
   constructor(
     readonly kind: IconKind,
@@ -125,7 +160,9 @@ export class Button {
       new MeshLambertMaterial({ color: new Color(0xe9e0cf) }),
     );
     body.position.y = 0.004;
-    this.face = new MeshBasicMaterial({ map: drawIcon(kind) });
+    const icon = drawIcon(kind);
+    this.face = new MeshBasicMaterial({ map: icon });
+    this.icons.set(kind, icon);
     const face = new Mesh(new CircleGeometry(RADIUS * 0.98, 32), this.face);
     face.rotation.x = -Math.PI / 2;
     face.position.y = 0.0082;
@@ -144,6 +181,17 @@ export class Button {
     this.lastFire = this.clock;
     this.press = 1;
     this.onPress();
+  }
+
+  /** Swaps the drawn icon (e.g. sound on/off). */
+  setIcon(kind: IconKind) {
+    let t = this.icons.get(kind);
+    if (!t) {
+      t = drawIcon(kind);
+      this.icons.set(kind, t);
+    }
+    this.face.map = t;
+    this.face.needsUpdate = true;
   }
 
   setVisible(v: boolean) {
