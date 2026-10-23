@@ -111,3 +111,13 @@ describe('levels', async () => {
     }
   });
 });
+
+describe('daily fold', async () => {
+  const { dailyLevel } = await import('../game/levels.js');
+  it('is the same picture for the same day and changes day to day', () => {
+    const a = dailyLevel(20400);
+    expect(dailyLevel(20400).solution).toEqual(a.solution);
+    const days = new Set(Array.from({ length: 30 }, (_, i) => JSON.stringify(dailyLevel(20400 + i).solution)));
+    expect(days.size).toBe(30);
+  });
+});
