@@ -243,11 +243,21 @@ export class GameSystem extends createSystem({
       const b = paperBounds(this.game.paper);
       const from = new Vector3((b.minX + b.maxX) / 2, 0.025, -(b.minY + b.maxY) / 2);
       this.game.boardRoot.localToWorld(from);
-      this.zoo.reveal(
+      const where = this.zoo.reveal(
         c.level.creature,
         Math.max(0, LOOKS.indexOf(c.level.look)),
         from,
         this.boardWorld(),
+      );
+      const name = c.level.creature;
+      const swims = name === 'fish' || name === 'whale';
+      this.game.say(
+        where
+          ? `The ${name} settled on your ${where}`
+          : swims
+            ? `The ${name} is swimming around you`
+            : `The ${name} is flying around you`,
+        4.2,
       );
       if (this.game.isDaily) {
         const days = new Set(this.progress.daily ?? []);

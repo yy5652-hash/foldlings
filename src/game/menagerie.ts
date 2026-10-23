@@ -4,7 +4,9 @@
  */
 
 import {
+  CanvasTexture,
   Color,
+  Mesh,
   DynamicDrawUsage,
   Group,
   InstancedMesh,
@@ -51,6 +53,14 @@ interface Live {
   endAir: boolean;
 }
 
+interface Home {
+  pos: Vector3;
+  normal: Vector3 | null;
+  air: boolean;
+  /** Where it settled, in words: "couch", "table", "wall", "floor", or "" for mid-air. */
+  where: string;
+}
+
 interface Travel {
   from: Vector3;
   to: Vector3;
@@ -60,6 +70,14 @@ interface Travel {
   hops: number;
   arc: number;
   endQuat: Quaternion;
+}
+
+/** Plain words for a surface, preferring the room scan's own label. */
+function describe(s: Surface): string {
+  const label = s.label.toLowerCase().replace(/_/g, ' ');
+  const known = ['table', 'desk', 'couch', 'sofa', 'bed', 'shelf', 'storage', 'screen', 'window', 'door', 'floor', 'wall'];
+  if (known.includes(label)) return label === 'storage' ? 'shelf' : label;
+  return s.kind === 'table' ? 'table' : s.kind;
 }
 
 function rand(a: number, b: number) {
@@ -136,7 +154,7 @@ export class Menagerie {
   }
 
   /** World position for a new home, plus the facing it should rest with. */
-  private findHome(habitat: Habitat, avoid: Vector3): { pos: Vector3; normal: Vector3 | null; air: boolean } {
+  private findHome(habitat: Habitat, avoid: Vector3): Home {
     const head = this.head();
     const fwd = this.forward();
     const others = this.live.map((l) => l.c.root.getWorldPosition(new Vector3()));
@@ -192,12 +210,19 @@ export class Menagerie {
         .sort((a, b) => prefer(a) - prefer(b));
       for (const s of list) {
         const p = sampleOn(s);
-        if (p) return { pos: p, normal: s.kind === 'wall' ? s.normal.clone() : null, air: false };
+        if (p) {
+          return {
+            pos: p,
+            normal: s.kind === 'wall' ? s.normal.clone() : null,
+            air: false,
+            where: describe(s),
+          };
+        }
       }
       return null;
     };
     const near = (s: Surface) => s.center.distanceTo(head) + Math.random() * 0.6;
-    let home: { pos: Vector3; normal: Vector3 | null; air: boolean } | null = null;
+    let home: Home | null = null;
     switch (habitat) {
       case 'ground':
         home = pick(['table'], near) ?? pick(['floor'], near);
@@ -221,17 +246,21 @@ export class Menagerie {
       const p = head.clone().addScaledVector(dir, r);
       p.y = high ? head.y + rand(0.35, 0.7) : head.y + rand(-0.45, 0.1);
       if (habitat === 'ground') p.y = Math.max(0.02, head.y - 1.1);
-      if (clear(p, 0.3)) return { pos: p, normal: null, air: habitat !== 'ground' };
+      if (clear(p, 0.3)) {
+        return { pos: p, normal: null, air: habitat !== 'ground', where: habitat === 'ground' ? 'floor' : '' };
+      }
     }
     return {
       pos: head.clone().addScaledVector(fwd, 1.2).setY(head.y),
       normal: null,
       air: true,
+      where: '',
     };
   }
 
   private spawnEntity(kind: CreatureKind, look: number): { c: Creature; entity: Entity } {
     const c = new Creature(kind, LOOKS[look % LOOKS.length]);
+    if (c.habitat === 'ground' || c.habitat === 'perch') c.root.add(blobShadow(kind === 'whale' ? 0.2 : 0.09));
     const entity = this.world.createTransformEntity(c.root);
     this.room.root.attach(c.root);
     entity.addComponent(RayInteractable);
@@ -324,7 +353,7 @@ export class Menagerie {
   }
 
   /** A new creature pops out of the paper at `from` and goes home. */
-  reveal(kind: CreatureKind, look: number, from: Vector3, avoid: Vector3) {
+  reveal(kind: CreatureKind, look: number, from: Vector3, avoid: Vector3): string {
     const { c, entity } = this.spawnEntity(kind, look);
     const home = this.findHome(c.habitat, avoid);
     const rest = this.restPose(home.pos, home.normal);
@@ -360,6 +389,7 @@ export class Menagerie {
     };
     this.saved.push(saved);
     this.save();
+    return home.where;
   }
 
   update(dt: number) {
@@ -398,10 +428,14 @@ export class Menagerie {
       const yaw = Math.atan2(local.x - root.position.x, local.z - root.position.z) + Math.PI;
       root.rotation.set(0, yaw, 0);
       if (tr.t > -0.6 && tr.t - dt <= -0.6) l.c.poke();
+      const sh = root.getObjectByName('Shadow');
+      if (sh) sh.visible = false;
       return;
     }
     root.scale.setScalar(1);
     const u = Math.min(1, tr.t / tr.dur);
+    const shadow = root.getObjectByName('Shadow');
+    if (shadow) shadow.visible = u >= 1;
     l.c.setTravelling(tr.mode === 'fly' && u < 1);
     const e = tr.mode === 'fly' ? u * u * (3 - 2 * u) : u;
     const p = this.tmp.copy(tr.from).lerp(tr.to, e);
@@ -432,6 +466,32 @@ export class Menagerie {
     this.saved = [];
     this.save();
   }
+}
+
+let shadowTex: CanvasTexture | null = null;
+
+/** Soft round contact shadow that grounds a creature on its surface. */
+function blobShadow(size: number): Mesh {
+  if (!shadowTex) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d')!;
+    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 31);
+    grad.addColorStop(0, 'rgba(0,0,0,0.45)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    shadowTex = new CanvasTexture(c);
+  }
+  const m = new Mesh(
+    new PlaneGeometry(size, size),
+    new MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }),
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.0015;
+  m.renderOrder = 5;
+  m.name = 'Shadow';
+  return m;
 }
 
 /** A burst of tiny paper triangles. */

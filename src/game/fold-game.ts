@@ -101,6 +101,8 @@ export class FoldGame {
   readonly guide = new Guide();
   private idle = 0;
   private hintTimer = 0;
+  private message = '';
+  private messageTimer = 0;
   private folds = 0;
 
   private drag: Drag | null = null;
@@ -515,9 +517,21 @@ export class FoldGame {
     this.paperView.setGlow(this.glow > 0 ? Math.sin(this.glow * Math.PI) : 0);
   }
 
+  /** Shows a short line on the caption strip for a few seconds. */
+  say(text: string, seconds = 3.5) {
+    this.message = text;
+    this.messageTimer = seconds;
+  }
+
   private updateGuide(dt: number) {
     const busy = this.drag !== null || this.settle !== null || this.solved || this.inputLocked;
     this.idle = busy ? 0 : this.idle + dt;
+    if (this.messageTimer > 0) {
+      this.messageTimer -= dt;
+      this.guide.setCaption(this.messageTimer > 0 ? this.message : '');
+      this.guide.update(dt);
+      return;
+    }
     if (this.hintTimer > 0) {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) {
