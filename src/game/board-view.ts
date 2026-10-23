@@ -25,7 +25,6 @@ import type { PaperLook } from './paper-texture.js';
 
 export const MAT_W = 0.5;
 export const MAT_D = 0.44;
-const PX_PER_M = 1280;
 
 function canvasTexture(w: number, h: number): [HTMLCanvasElement, CanvasTexture] {
   const c = document.createElement('canvas');

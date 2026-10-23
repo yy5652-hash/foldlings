@@ -16,7 +16,7 @@ import {
   SRGBColorSpace,
   Vector3,
 } from '@iwsdk/core';
-import { Line, lineSide, V2 } from '../fold/geom.js';
+import { lineSide, V2 } from '../fold/geom.js';
 import { creaseLine, FoldSpec, PaperState, splitPaper } from '../fold/paper.js';
 import { stackHeights, facetGeometry, LAYER_GAP, BASE_HEIGHT } from './paper-view.js';
 
@@ -40,7 +40,6 @@ export class Guide {
   private fade = 0;
   private axis = new Vector3();
   private sign: 1 | -1 = 1;
-  private line: Line = { nx: 1, ny: 0, d: 0 };
   /** Grab point on the moving part (board space) and its distance to the crease. */
   private grab: V2 = { x: 0, y: 0 };
   private q = new Quaternion();
@@ -110,7 +109,6 @@ export class Guide {
     const line = creaseLine(fold);
     const parts = splitPaper(paper, line, fold.s);
     if (!parts) return false;
-    this.line = line;
     this.sign = fold.s;
     for (const c of [...this.flapInner.children]) {
       this.flapInner.remove(c);

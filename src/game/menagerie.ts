@@ -8,9 +8,7 @@ import {
   Color,
   Mesh,
   DynamicDrawUsage,
-  Group,
   InstancedMesh,
-  Matrix4,
   MeshBasicMaterial,
   Object3D,
   PlaneGeometry,
@@ -104,8 +102,6 @@ export class Menagerie {
   realRoom = false;
   private avoid = new Vector3(0, -10, 0);
   private tmp = new Vector3();
-  private tmpQ = new Quaternion();
-  private m = new Matrix4();
 
   constructor(
     private world: World,

@@ -174,6 +174,9 @@ export class Button {
       addEventListener(type: string, fn: () => void): void;
     };
     target.addEventListener('pointerdown', () => this.fire());
+    // Light up while a fingertip, ray or gaze is on the token.
+    target.addEventListener('pointerenter', () => this.hovers++);
+    target.addEventListener('pointerleave', () => (this.hovers = Math.max(0, this.hovers - 1)));
   }
 
   private fire() {
@@ -203,13 +206,17 @@ export class Button {
     this.pulseLeft = seconds;
   }
   private pulseLeft = 0;
+  private hovers = 0;
+  private glow = 0;
 
   update(dt: number) {
     this.clock += dt;
     this.press = Math.max(0, this.press - dt * 5);
     this.pulseLeft = Math.max(0, this.pulseLeft - dt);
     const bounce = this.pulseLeft > 0 ? Math.abs(Math.sin(this.clock * 7)) * 0.25 : 0;
+    this.glow += ((this.hovers > 0 ? 1 : 0) - this.glow) * Math.min(1, dt * 12);
     this.cap.position.y = 0.004 - this.press * 0.004 + bounce * 0.012;
-    this.cap.scale.setScalar(1 + bounce * 0.4);
+    this.cap.scale.setScalar(1 + bounce * 0.4 + this.glow * 0.08);
+    this.face.color.setRGB(1, 1 - this.glow * 0.08, 1 - this.glow * 0.3);
   }
 }

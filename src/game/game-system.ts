@@ -18,7 +18,7 @@ import { paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
-import { isMuted, setMuted, startMusic } from './sfx.js';
+import { audioContext, audioDestination, isMuted, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Menagerie } from './menagerie.js';
 import {
   floatingPlacement,
@@ -113,6 +113,14 @@ export class GameSystem extends createSystem({
         zoo: this.zoo,
         world: this.world,
         recenter: () => this.place(true),
+        resetAll: () => {
+          this.zoo.reset();
+          this.progress = { level: 0, solved: [], daily: [], muted: false };
+          this.saveProgress();
+          this.game.loadLevel(0);
+        },
+        audio: () => ({ ctx: audioContext(), master: audioDestination() }),
+        stopMusic: () => stopMusic(),
         planes: () =>
           surfacesFromPlanes(this.planeInfos()).map((p) => ({
             kind: p.kind,

@@ -29,6 +29,12 @@ export default async function ({ page, frame, cdp, signal }) {
   const resolve = async (v) => {
     if (Array.isArray(v)) return Promise.all(v.map(resolve));
     if (v && typeof v === 'object') {
+      if (typeof v.$creature === 'string') {
+        const p = await frame.evaluate((k) => window.__foldlings.zoo.positions().find((c) => c.kind === k)?.p, v.$creature);
+        if (!p) throw new Error(`no ${v.$creature} in the zoo`);
+        const up = v.up ?? 0;
+        return { x: p[0], y: p[1] + up, z: p[2] };
+      }
       if (Array.isArray(v.$board)) {
         const [x, y, z] = await frame.evaluate((b) => window.__foldlings.boardWorld(...b), v.$board);
         return { x, y, z };
@@ -91,6 +97,19 @@ export default async function ({ page, frame, cdp, signal }) {
       await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId });
     } catch {}
   });
+  // Capture the app's own sound effects alongside the picture.
+  await frame.evaluate(() => {
+    window.__foldlings.stopMusic?.();
+    const a = window.__foldlings.audio();
+    if (!a.ctx || !a.master) return;
+    const dest = a.ctx.createMediaStreamDestination();
+    a.master.connect(dest);
+    const rec = new MediaRecorder(dest.stream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 192000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => chunks.push(e.data);
+    window.__filmAudio = { rec, chunks, dest, master: a.master };
+    rec.start();
+  });
   const t0 = Date.now();
   await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: width, maxHeight: height, everyNthFrame: 1 });
   const marks = [];
@@ -127,6 +146,20 @@ export default async function ({ page, frame, cdp, signal }) {
     if (s.wait) await new Promise((r) => setTimeout(r, s.wait * 1000));
   }
   await cdp.send('Page.stopScreencast');
+  const b64 = await frame.evaluate(async () => {
+    const f = window.__filmAudio;
+    if (!f) return '';
+    await new Promise((r) => {
+      f.rec.onstop = r;
+      f.rec.stop();
+    });
+    f.master.disconnect(f.dest);
+    const buf = new Uint8Array(await new Blob(f.chunks, { type: 'audio/webm' }).arrayBuffer());
+    let str = '';
+    for (let i = 0; i < buf.length; i += 0x8000) str += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return btoa(str);
+  });
+  if (b64) writeFileSync(join(dir, 'audio.webm'), Buffer.from(b64, 'base64'));
   writeFileSync(join(dir, 'marks.json'), JSON.stringify({ marks, ms: Date.now() - t0 }, null, 1));
   return { frames: count, seconds: (Date.now() - t0) / 1000, marks: marks.length, results: results.filter(Boolean).slice(0, 8) };
 }
