@@ -22,8 +22,10 @@ import {
   V2,
 } from '../fold/geom.js';
 import {
+  applyFold,
   applyFolds,
   Facet,
+  FoldSpec,
   foldPaper,
   initialPaper,
   PaperState,
@@ -34,6 +36,7 @@ import {
 } from '../fold/paper.js';
 import { BoardView } from './board-view.js';
 import { Button, IconKind } from './button.js';
+import { Guide } from './guide.js';
 import { Level, LEVELS } from './levels.js';
 import { PaperTextures } from './paper-texture.js';
 import { PaperView } from './paper-view.js';
@@ -84,8 +87,15 @@ export class FoldGame {
   private creaseHistory: number[] = [];
   private target: Uint8Array = new Uint8Array(0);
   private targetFacets: Facet[] = [];
+  /** Picture after each step of the known solution, for hints. */
+  private prefixes: Uint8Array[] = [];
   solved = false;
   inputLocked = false;
+  isDaily = false;
+  readonly guide = new Guide();
+  private idle = 0;
+  private hintTimer = 0;
+  private folds = 0;
 
   private drag: Drag | null = null;
   private settle: Settle | null = null;
@@ -106,6 +116,7 @@ export class FoldGame {
     this.textures = new PaperTextures(LEVELS[0].look, 1);
     this.paperView = new PaperView(this.textures);
     this.boardRoot.add(this.paperView.root);
+    this.boardRoot.add(this.guide.root);
 
     // The fold surface takes rays, gaze and the desktop mouse.
     const hit = world.createTransformEntity(this.board.hitPlane, this.boardEntity);
@@ -143,19 +154,58 @@ export class FoldGame {
 
   loadLevel(index: number) {
     this.levelIndex = ((index % LEVELS.length) + LEVELS.length) % LEVELS.length;
-    this.level = LEVELS[this.levelIndex];
-    const goal = applyFolds(this.level.solution);
-    if (!goal) throw new Error(`Level ${this.level.id} has an invalid solution`);
+    this.isDaily = false;
+    this.setLevel(LEVELS[this.levelIndex], `${this.levelIndex + 1} / ${LEVELS.length}`, this.levelIndex + 3);
+  }
+
+  loadDaily(level: Level, subtitle: string) {
+    this.isDaily = true;
+    this.setLevel(level, subtitle, level.id.length * 17);
+  }
+
+  private setLevel(level: Level, subtitle: string, seed: number) {
+    this.level = level;
+    const goal = applyFolds(level.solution);
+    if (!goal) throw new Error(`Level ${level.id} has an invalid solution`);
     this.targetFacets = goal.facets;
     this.target = rasterize(goal);
-    this.textures.setLook(this.level.look, this.levelIndex + 3);
-    this.board.setGoal(
-      this.targetFacets,
-      this.level.look,
-      this.level.name,
-      `${this.levelIndex + 1} / ${LEVELS.length}`,
-    );
+    this.prefixes = [rasterize(initialPaper())];
+    let s: PaperState | null = initialPaper();
+    for (const f of level.solution) {
+      s = s && applyFold(s, f);
+      if (s) this.prefixes.push(rasterize(s));
+    }
+    this.textures.setLook(level.look, seed);
+    this.board.setGoal(this.targetFacets, level.look, level.name, subtitle);
     this.restart();
+  }
+
+  /** Teaching levels show the ghost fold on their own. */
+  private get tutorial(): boolean {
+    return !this.isDaily && this.levelIndex < 2;
+  }
+
+  private captionFor(): string {
+    if (this.isDaily) return '';
+    switch (this.levelIndex) {
+      case 0:
+        return this.folds === 0 ? 'Pinch the corner and fold it over' : '';
+      case 1:
+        return 'Match the shape on the card';
+      case 2:
+        return 'Folds snap to the dots';
+      default:
+        return '';
+    }
+  }
+
+  /** The next fold of the known solution, if the paper is still on that path. */
+  private nextFold(): FoldSpec | null {
+    const r = rasterize(this.paper);
+    for (let k = this.prefixes.length - 2; k >= 0; k--) {
+      if (rasterMatch(r, this.prefixes[k]) >= 0.999) return this.level.solution[k];
+    }
+    return null;
   }
 
   restart() {
@@ -166,6 +216,9 @@ export class FoldGame {
     this.solved = false;
     this.drag = null;
     this.settle = null;
+    this.folds = 0;
+    this.idle = 0;
+    this.guide.hide();
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
@@ -177,6 +230,7 @@ export class FoldGame {
     if (!prev) return;
     sfx.undo();
     this.paper = prev;
+    this.folds = Math.max(0, this.folds - 1);
     this.creases.length = this.creaseHistory.pop() ?? 0;
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
@@ -184,8 +238,15 @@ export class FoldGame {
   }
 
   hint() {
-    // Placeholder until the guided hint lands: flash the goal outline.
-    this.board.setGhostOpacity(1);
+    const next = this.nextFold();
+    if (next && this.guide.show(this.paper, next)) {
+      this.hintTimer = 5.2;
+      return;
+    }
+    // Off the known path: point at undo instead.
+    this.guide.setCaption(this.history.length ? 'Undo, then try another fold' : '');
+    this.buttons.find((b) => b.kind === 'undo')?.pulse();
+    this.hintTimer = 3;
   }
 
   // ---------------------------------------------------------------- input
@@ -323,6 +384,8 @@ export class FoldGame {
     p: V2,
     hand: Point3,
   ) {
+    this.guide.hide();
+    this.idle = 0;
     this.drag = {
       kind,
       source,
@@ -369,10 +432,31 @@ export class FoldGame {
   update(dt: number, time: number) {
     this.time = time;
     for (const b of this.buttons) b.update(dt);
+    this.updateGuide(dt);
     if (this.drag) this.updateDrag(dt);
     if (this.settle) this.updateSettle(dt);
     this.glow = Math.max(0, this.glow - dt * 1.2);
     this.paperView.setGlow(this.glow > 0 ? Math.sin(this.glow * Math.PI) : 0);
+  }
+
+  private updateGuide(dt: number) {
+    const busy = this.drag !== null || this.settle !== null || this.solved || this.inputLocked;
+    this.idle = busy ? 0 : this.idle + dt;
+    if (this.hintTimer > 0) {
+      this.hintTimer -= dt;
+      if (this.hintTimer <= 0) {
+        this.guide.hide();
+        this.guide.setCaption(busy ? '' : this.captionFor());
+      }
+    } else {
+      this.guide.setCaption(this.solved ? '' : this.captionFor());
+      const wait = this.folds === 0 ? 1.2 : 6;
+      if (this.tutorial && !busy && !this.guide.showing && this.idle > wait) {
+        const next = this.nextFold();
+        if (next) this.guide.show(this.paper, next);
+      }
+    }
+    this.guide.update(dt);
   }
 
   private updateDrag(dt: number, immediate = false) {
@@ -438,6 +522,7 @@ export class FoldGame {
     }
     this.history.push(this.paper);
     this.paper = next;
+    this.folds++;
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     sfx.fold();

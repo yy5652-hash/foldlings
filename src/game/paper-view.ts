@@ -20,7 +20,7 @@ import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
 import type { PaperTextures } from './paper-texture.js';
 
 export const LAYER_GAP = 0.0006;
-const BASE_HEIGHT = 0.0012;
+export const BASE_HEIGHT = 0.0012;
 
 const vertex = /* glsl */ `
 varying vec2 vUv;
@@ -98,7 +98,7 @@ export function stackHeights(facets: readonly Facet[]): number[] {
   return h;
 }
 
-function facetGeometry(f: Facet, y: number, expand = 0): BufferGeometry {
+export function facetGeometry(f: Facet, y: number, expand = 0): BufferGeometry {
   const n = f.poly.length;
   let cx = 0;
   let cy = 0;

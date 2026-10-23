@@ -8,6 +8,7 @@ import {
   Color,
   createSystem,
   DirectionalLight,
+  Group,
   HemisphereLight,
   Vector3,
   VisibilityState,
@@ -25,6 +26,7 @@ import {
   tablePlacement,
 } from './placement.js';
 import { RoomFrame, safeGet, safeSet, surfacesFromPlanes } from './room.js';
+import { makeDesk, VirtualRoom } from './virtual-room.js';
 
 /** Where the mat rests in the flat browser view. */
 const DESKTOP_POSITION = new Vector3(0, 0.74, -0.42);
@@ -54,6 +56,10 @@ export class GameSystem extends createSystem({
   private up = new Vector3(0, 1, 0);
   private celebrate: { t: number; level: Level; revealed: boolean } | null = null;
   private galleryItems: Creature[] = [];
+  private vroom!: VirtualRoom;
+  private desk!: Group;
+  /** 'ar' shows the real room; 'vr' and 'desktop' show the virtual study. */
+  private mode: 'desktop' | 'ar' | 'vr' = 'desktop';
 
   init(): void {
     // Soft room light for the mat, buttons and creatures.
@@ -69,6 +75,8 @@ export class GameSystem extends createSystem({
       /* fresh start */
     }
 
+    this.vroom = new VirtualRoom();
+    this.world.createTransformEntity(this.vroom.root);
     this.room = new RoomFrame(this.world);
     this.zoo = new Menagerie(this.world, this.room);
     this.game = new FoldGame(this.world, {
@@ -79,6 +87,9 @@ export class GameSystem extends createSystem({
     });
     this.game.loadLevel(this.progress.level);
     this.game.boardRoot.position.copy(DESKTOP_POSITION);
+    this.desk = makeDesk();
+    this.game.boardRoot.add(this.desk);
+    this.setMode('desktop');
 
     if (import.meta.env.DEV) {
       // Test hook: board point (u, v, height) → world position.
@@ -106,14 +117,37 @@ export class GameSystem extends createSystem({
     this.world.renderer.xr.addEventListener('sessionstart', () => {
       this.sessionTime = 0;
       this.placed = null;
+      const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
+      this.setMode(blend && blend !== 'opaque' ? 'ar' : 'vr');
     });
     this.world.renderer.xr.addEventListener('sessionend', () => {
       this.sessionTime = -1;
       this.desktopTime = 0;
       this.placed = null;
+      this.setMode('desktop');
       this.game.boardRoot.position.copy(DESKTOP_POSITION);
       this.game.boardRoot.quaternion.identity();
     });
+  }
+
+  private setMode(mode: 'desktop' | 'ar' | 'vr') {
+    this.mode = mode;
+    const virtual = mode !== 'ar';
+    this.vroom.root.visible = virtual;
+    this.desk.visible = virtual;
+    if (virtual) this.zoo.setSurfaces(this.vroom.surfaces());
+  }
+
+  /** Stretches the desk legs down to the floor under the mat. */
+  private fitDesk() {
+    if (!this.desk.visible) return;
+    const y = this.game.boardRoot.position.y;
+    const len = Math.max(0.05, y - 0.0375);
+    for (const leg of this.desk.children) {
+      if (leg.name !== 'DeskLeg') continue;
+      leg.scale.y = len;
+      leg.position.y = -0.0375 - len / 2;
+    }
   }
 
   private planeInfos(): PlaneInfo[] {
@@ -129,7 +163,7 @@ export class GameSystem extends createSystem({
   private place(force: boolean) {
     if (!force && this.placed?.onSurface) return;
     const head = this.player.head;
-    const table = tablePlacement(head, this.planeInfos());
+    const table = this.mode === 'ar' ? tablePlacement(head, this.planeInfos()) : null;
     const next = table ?? (force || !this.placed ? floatingPlacement(head) : null);
     if (!next) return;
     const root = this.game.boardRoot;
@@ -190,12 +224,12 @@ export class GameSystem extends createSystem({
       // First placement once the head pose has settled, then upgrade to a
       // real table when the room scan arrives.
       if (!this.placed && this.sessionTime > 0.3) this.place(false);
-      else if (this.placed && !this.placed.onSurface && this.sessionTime < 10) {
+      else if (this.mode === 'ar' && this.placed && !this.placed.onSurface && this.sessionTime < 10) {
         const table = tablePlacement(this.player.head, this.planeInfos());
         if (table) this.place(false);
       }
       this.surfaceClock -= delta;
-      if (this.surfaceClock <= 0) {
+      if (this.mode === 'ar' && this.surfaceClock <= 0) {
         this.surfaceClock = 1;
         this.zoo.setSurfaces(surfacesFromPlanes(this.planeInfos()));
       }
@@ -216,6 +250,7 @@ export class GameSystem extends createSystem({
     if (this.celebrate) this.updateCelebration(delta);
     this.game.update(delta, time);
     this.zoo.update(delta);
+    this.fitDesk();
     for (const c of this.galleryItems) c.update(delta);
   }
 }

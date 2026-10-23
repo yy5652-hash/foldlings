@@ -101,3 +101,13 @@ describe('crease from a hand motion', () => {
     expect(snap.s).toBe(1);
   });
 });
+
+describe('levels', async () => {
+  const { LEVELS, DAILY } = await import('./levels-fixture.js');
+  it('every campaign and daily solution folds cleanly inside the board', () => {
+    for (const l of [...LEVELS, ...DAILY]) {
+      const s = applyFolds(l.solution);
+      expect(s, l.id).not.toBeNull();
+    }
+  });
+});

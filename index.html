@@ -1,16 +1,168 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, shrink-to-fit=no"
-    />
-    <link rel="icon" href="data:," />
-    <title>foldlings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="description" content="Foldlings: fold paper with your bare hands. Every puzzle you solve becomes an origami creature that lives in your room." />
+    <meta name="theme-color" content="#2f4a45" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <title>Foldlings</title>
+    <style>
+      :root {
+        --ink: #2b231c;
+        --paper: #f7f1e6;
+        --mat: #2f4a45;
+        --accent: #e2574c;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1c2422;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+        overflow: hidden;
+      }
+      #scene-container {
+        position: fixed;
+        inset: 0;
+      }
+      #landing {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        pointer-events: none;
+        color: var(--paper);
+      }
+      #landing.hidden {
+        display: none;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 22px 28px;
+        font-weight: 700;
+        font-size: 28px;
+        letter-spacing: 0.5px;
+        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+      }
+      .brand img {
+        width: 44px;
+        height: 44px;
+      }
+      .card {
+        pointer-events: auto;
+        margin: 0 auto 28px;
+        max-width: 560px;
+        width: calc(100% - 32px);
+        box-sizing: border-box;
+        background: rgba(247, 241, 230, 0.96);
+        color: var(--ink);
+        border-radius: 22px;
+        padding: 22px 24px 20px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      }
+      .card h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+      }
+      .card p {
+        margin: 0 0 14px;
+        line-height: 1.45;
+        font-size: 16px;
+        color: #4a3f35;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin: 0 0 16px;
+        padding: 0;
+        list-style: none;
+        font-size: 13.5px;
+        color: #5a4d40;
+      }
+      .steps li {
+        background: #efe6d6;
+        border-radius: 12px;
+        padding: 10px;
+        line-height: 1.35;
+      }
+      .steps b {
+        display: block;
+        color: var(--ink);
+        font-size: 14.5px;
+        margin-bottom: 2px;
+      }
+      .buttons {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        font: inherit;
+        font-weight: 650;
+        font-size: 17px;
+        border: 0;
+        border-radius: 999px;
+        padding: 14px 22px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+        flex: 1 1 220px;
+      }
+      button.secondary {
+        background: var(--mat);
+        color: var(--paper);
+        flex: 1 1 140px;
+      }
+      button.ghost {
+        background: transparent;
+        color: #5a4d40;
+        text-decoration: underline;
+        padding: 8px 6px;
+        font-size: 14px;
+      }
+      button[disabled] {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .note {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #7a6b5c;
+      }
+      @media (max-width: 520px) {
+        .steps {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
   </head>
-  <body style="margin: 0">
+  <body>
     <div id="scene-container"></div>
+    <div id="landing">
+      <div class="brand"><img src="./icon.svg" alt="" />Foldlings</div>
+      <div class="card">
+        <h1>Fold paper with your bare hands.</h1>
+        <p>Every puzzle you solve becomes a little origami creature that moves into your room — and is still there next time.</p>
+        <ul class="steps">
+          <li><b>Sit at a table</b>The mat lands on it. Everything is within arm's reach.</li>
+          <li><b>Pinch and fold</b>Pick up a corner and lay it over. Creases snap into place.</li>
+          <li><b>Match the card</b>Fold the shape shown on the card to set a creature free.</li>
+        </ul>
+        <div class="buttons">
+          <button id="play-ar" class="primary" disabled>Play in your room</button>
+          <button id="play-vr" class="secondary" disabled>Play in VR</button>
+        </div>
+        <div class="note" id="note">Loading…</div>
+        <button id="try-mouse" class="ghost" hidden>Try it here with a mouse</button>
+      </div>
+    </div>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

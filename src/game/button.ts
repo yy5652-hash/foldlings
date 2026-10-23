@@ -150,9 +150,18 @@ export class Button {
     this.root.visible = v;
   }
 
+  /** Draws the eye with a few gentle bounces. */
+  pulse(seconds = 2.4) {
+    this.pulseLeft = seconds;
+  }
+  private pulseLeft = 0;
+
   update(dt: number) {
     this.clock += dt;
     this.press = Math.max(0, this.press - dt * 5);
-    this.cap.position.y = 0.004 - this.press * 0.004;
+    this.pulseLeft = Math.max(0, this.pulseLeft - dt);
+    const bounce = this.pulseLeft > 0 ? Math.abs(Math.sin(this.clock * 7)) * 0.25 : 0;
+    this.cap.position.y = 0.004 - this.press * 0.004 + bounce * 0.012;
+    this.cap.scale.setScalar(1 + bounce * 0.4);
   }
 }
