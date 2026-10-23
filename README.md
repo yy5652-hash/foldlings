@@ -1,45 +1,33 @@
-# IWSDK App
+# Foldlings
 
-This project uses `iwsdk.config.json` for declarative scene, asset, component,
-XR, and emulator configuration. Application systems remain explicit in
-`src/index.ts`.
+**Fold paper with your bare hands. Every puzzle you solve becomes a little origami creature that moves into your room — and is still there next time.**
 
-```sh
+Play on Meta Quest 3 / 3S in the Quest Browser: **https://yy5652-hash.github.io/foldlings/**
+(no install; hands only; best seated at a table).
+
+## How to play
+
+1. Sit at a table and press **Play in your room**. The folding mat lands on your real table (or floats at desk height if the room has not been scanned).
+2. **Pinch** any part of the paper and lay it over. The crease follows your hand and snaps to the dots on the mat, so shaky hands still fold cleanly.
+3. Match the shape on the card. When the folded picture matches, the paper springs to life as a crane, frog, fox, fish, butterfly, boat, rabbit or whale — and goes to live somewhere in your room: on your coffee table, couch, shelf, floor or wall.
+4. Come back tomorrow for the **Daily Fold**. Your paper zoo keeps growing and stays where it settled.
+
+Round tokens on the mat: **undo**, **hint** (a ghost hand shows the next fold), **restart**, **daily fold**, **sound**, **recenter**. Poke them with a fingertip, point and pinch, or look and pinch.
+
+## Built with
+
+- [Meta Immersive Web SDK](https://github.com/facebook/immersive-web-sdk) (IWSDK, WebXR, Three.js, ECS)
+- WebXR hand tracking, plane and mesh detection, anchors (persistent where supported), passthrough
+- A custom folding engine in TypeScript (`src/fold/`): paper is a stack of convex facets; a fold clips, reflects and restacks them. Unit-tested with Vitest.
+- All models, textures and sounds are generated in code — no external art or audio files.
+
+## Develop
+
+```bash
 npm install
-npm run dev
+npm run dev        # IWSDK dev server with the IWER headset emulator
+npx vitest run     # folding engine tests
+npm run build
 ```
 
-Use the Runtime and Editor controls in the managed browser to switch between
-the running experience and its authored scene.
-
-## Starter content
-
-The robot and welcome panel are small examples of authored scene content plus
-runtime systems. The robot turns toward the player's head and plays a sound
-when pressed. To remove the robot, delete its scene node, its `RobotSystem`
-registration from `src/index.ts` or `src/index.js`, and its `Robot` registration
-from `src/components.ts` or `src/components.js`; you can then delete the unused
-robot component and system files. To remove the welcome panel, delete its scene
-node and its `PanelSystem` registration from the application entry point.
-
-The robot stands on the second of three numbered stations. The first holds dark
-pieces you can grab and move, and the third holds a ring you can spin in place.
-The studio props (the plinths and the dark pieces, plus the floor and stage in VR
-and Desktop 3D) are built in code in `src/scene-assets/studio.scene-asset.ts` or
-`.js`. The VR and Desktop 3D background furniture is built the same way in
-`src/scene-assets/decor.scene-asset.ts` or `.js`, so the starter downloads no
-extra models. To remove any of them, delete their scene nodes and their entries
-in `src/assets.ts` or `src/assets.js`, then delete the files you no longer use.
-The station labels are `public/ui/label-*.uikitml`.
-
-The rest of the look is built-in components in the scene, which you can edit in
-the editor without code. The soft light on every object is the scene root's
-`IBLGradient` (select the Level Root to edit it), and the soft shadows under
-each object are `ContactShadow` nodes. In VR and Desktop 3D, the sky is the
-scene root's `DomeGradient` (its colors, tilt and dither are also on the Level
-Root), and the floor fades into it through the `DomeFade` on the floor node. AR
-projects have no sky or floor, so passthrough stays visible, and a
-`ShadowCatcher` node grounds the stations.
-
-- Minimal scene walkthrough: https://iwsdk.dev/guides/01b-minimal-scene.html
-- XR-enabled projects — IWER emulator controls: https://iwsdk.dev/guides/02-testing-experience.html#iwer-controls
+`scripts/gen-levels.ts` searches fold sequences breadth-first to find solvable goal pictures for the campaign and the daily pool.

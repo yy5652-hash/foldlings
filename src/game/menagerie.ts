@@ -275,8 +275,8 @@ export class Menagerie {
    * `persist` false (VR, flat screen): homes are temporary and saved spots
    * from the real room are neither used nor overwritten.
    */
-  restore(avoid: Vector3, persist: boolean) {
-    if (this.placedThisSession) return;
+  restore(avoid: Vector3, persist: boolean): number | null {
+    if (this.placedThisSession) return null;
     this.avoid.copy(avoid);
     this.placedThisSession = true;
     const shown = this.saved.slice(-MAX_SHOWN);
@@ -309,6 +309,7 @@ export class Menagerie {
       moved = true;
     }
     if (moved && persist) this.save();
+    return this.live.length;
   }
 
   private toRoom(world: Vector3): Vector3 {

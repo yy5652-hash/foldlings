@@ -509,6 +509,7 @@ export class FoldGame {
   update(dt: number, time: number) {
     this.time = time;
     for (const b of this.buttons) b.update(dt);
+    this.board.update(dt);
     this.updateGuide(dt);
     this.updateVanish(dt);
     if (this.drag) this.updateDrag(dt);
@@ -620,9 +621,15 @@ export class FoldGame {
       this.solved = true;
       this.glow = 1;
       this.board.setGhostOpacity(0);
+      this.board.setOutlineVisible(false);
       sfx.solved();
       this.events.onSolved?.(this.level, this.paper, this.boardRoot);
     }
+  }
+
+  /** True while a fold is being made or animated. */
+  get busy(): boolean {
+    return this.drag !== null || this.settle !== null;
   }
 
   /** Paper facets in world space, for the creature reveal. */

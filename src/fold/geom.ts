@@ -188,3 +188,41 @@ export function closestOnConvex(poly: readonly V2[], p: V2): V2 {
   }
   return best;
 }
+
+/**
+ * Outline of the union of convex CCW polygons, as segments. Edge pieces whose
+ * outside is covered by another polygon are dropped.
+ */
+export function unionOutline(polys: readonly (readonly V2[])[], step = 0.004): [V2, V2][] {
+  const covered = (p: V2) => polys.some((q) => insideConvex(q, p, 0));
+  const out: [V2, V2][] = [];
+  for (const poly of polys) {
+    const n = poly.length;
+    for (let i = 0; i < n; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % n];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 1e-6) continue;
+      const nx = (b.y - a.y) / len;
+      const ny = -(b.x - a.x) / len;
+      const pieces = Math.max(1, Math.round(len / step));
+      let start: V2 | null = null;
+      for (let k = 0; k < pieces; k++) {
+        const t0 = k / pieces;
+        const t1 = (k + 1) / pieces;
+        const tm = (t0 + t1) / 2;
+        const m = { x: a.x + (b.x - a.x) * tm + nx * 0.0015, y: a.y + (b.y - a.y) * tm + ny * 0.0015 };
+        const p0 = { x: a.x + (b.x - a.x) * t0, y: a.y + (b.y - a.y) * t0 };
+        const p1 = { x: a.x + (b.x - a.x) * t1, y: a.y + (b.y - a.y) * t1 };
+        if (!covered(m)) {
+          if (!start) start = p0;
+          if (k === pieces - 1) out.push([start, p1]);
+        } else if (start) {
+          out.push([start, p0]);
+          start = null;
+        }
+      }
+    }
+  }
+  return out;
+}

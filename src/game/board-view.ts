@@ -4,8 +4,10 @@
  */
 
 import {
+  BufferGeometry,
   CanvasTexture,
   Color,
+  Float32BufferAttribute,
   CylinderGeometry,
   Group,
   Mesh,
@@ -17,7 +19,7 @@ import {
   SRGBColorSpace,
   Vector3,
 } from '@iwsdk/core';
-import { Line } from '../fold/geom.js';
+import { Line, unionOutline } from '../fold/geom.js';
 import { BOARD, Facet, GRID } from '../fold/paper.js';
 import type { PaperLook } from './paper-texture.js';
 
@@ -102,6 +104,15 @@ export class BoardView {
   readonly card: Group;
   private crease: Mesh;
   private creaseMat: MeshBasicMaterial;
+  private outline: Mesh;
+  private outlineMat = new MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+    depthWrite: false,
+  });
+  private clock = 0;
 
   constructor() {
     this.root.name = 'Board';
@@ -190,6 +201,12 @@ export class BoardView {
     this.crease.visible = false;
     this.root.add(this.crease);
 
+    // Dashed goal outline drawn over the paper so the target is always visible.
+    this.outline = new Mesh(new BufferGeometry(), this.outlineMat);
+    this.outline.renderOrder = 45;
+    this.outline.name = 'GoalOutline';
+    this.root.add(this.outline);
+
     // Goal card on a little easel at the far edge of the mat.
     [this.cardCanvas, this.cardTex] = canvasTexture(512, 640);
     this.card = new Group();
@@ -212,7 +229,52 @@ export class BoardView {
     this.root.add(this.card);
   }
 
+  private buildOutline(facets: readonly Facet[]) {
+    const segs = unionOutline(facets.map((f) => f.poly));
+    const pos: number[] = [];
+    const w = 0.0012;
+    const y = 0.008;
+    const dash = 0.008;
+    const gap = 0.005;
+    for (const [a, b] of segs) {
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const dx = (b.x - a.x) / len;
+      const dy = (b.y - a.y) / len;
+      const nx = -dy * w;
+      const ny = dx * w;
+      for (let t = 0; t < len; t += dash + gap) {
+        const e = Math.min(len, t + dash);
+        const p0 = { x: a.x + dx * t, y: a.y + dy * t };
+        const p1 = { x: a.x + dx * e, y: a.y + dy * e };
+        // Board (u, v) → local (x, y, -z); two triangles per dash.
+        const q = [
+          [p0.x - nx, p0.y - ny],
+          [p1.x - nx, p1.y - ny],
+          [p1.x + nx, p1.y + ny],
+          [p0.x + nx, p0.y + ny],
+        ];
+        for (const i of [0, 1, 2, 0, 2, 3]) pos.push(q[i][0], y, -q[i][1]);
+      }
+    }
+    this.outline.geometry.dispose();
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+    this.outline.geometry = g;
+  }
+
+  /** Gentle breathing of the goal outline. */
+  update(dt: number) {
+    this.clock += dt;
+    this.outlineMat.opacity = 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
+  }
+
+  setOutlineVisible(v: boolean) {
+    this.outline.visible = v;
+  }
+
   setGoal(facets: readonly Facet[], look: PaperLook, title: string, subtitle: string) {
+    this.buildOutline(facets);
+    this.outline.visible = true;
     const g = this.ghostCanvas.getContext('2d')!;
     g.clearRect(0, 0, 1024, 1024);
     drawShape(g, facets, look, 1024, 'rgba(255,255,255,0.95)', 7);

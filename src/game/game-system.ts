@@ -290,7 +290,13 @@ export class GameSystem extends createSystem({
       // First placement once the head pose has settled, then upgrade to a
       // real table when the room scan arrives.
       if (!this.placed && this.sessionTime > 0.3) this.place(false);
-      else if (this.mode === 'ar' && this.placed && !this.placed.onSurface && this.sessionTime < 10) {
+      else if (
+        this.mode === 'ar' &&
+        this.placed &&
+        !this.placed.onSurface &&
+        this.sessionTime < 10 &&
+        !this.game.busy
+      ) {
         const table = tablePlacement(this.player.head, this.planeInfos());
         if (table) this.place(false);
       }
@@ -300,7 +306,13 @@ export class GameSystem extends createSystem({
         this.zoo.setSurfaces(surfacesFromPlanes(this.planeInfos()));
       }
       if (this.room.ready && this.sessionTime > 2.5 && this.moveT >= 1) {
-        this.zoo.restore(this.boardWorld(), this.mode === 'ar');
+        const n = this.zoo.restore(this.boardWorld(), this.mode === 'ar');
+        if (n) {
+          this.game.say(
+            n === 1 ? 'Welcome back! Your paper friend is still here' : `Welcome back! Your ${n} paper friends are still here`,
+            4,
+          );
+        }
       }
     } else {
       this.desktopTime += delta;
