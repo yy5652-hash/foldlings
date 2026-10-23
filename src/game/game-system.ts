@@ -148,6 +148,7 @@ export class GameSystem extends createSystem({
 
   private setMode(mode: 'desktop' | 'ar' | 'vr') {
     this.mode = mode;
+    this.zoo.realRoom = mode === 'ar';
     const virtual = mode !== 'ar';
     this.vroom.root.visible = virtual;
     this.desk.visible = virtual;
@@ -299,7 +300,7 @@ export class GameSystem extends createSystem({
         this.zoo.setSurfaces(surfacesFromPlanes(this.planeInfos()));
       }
       if (this.room.ready && this.sessionTime > 2.5 && this.moveT >= 1) {
-        this.zoo.restore(this.boardWorld(), true);
+        this.zoo.restore(this.boardWorld(), this.mode === 'ar');
       }
     } else {
       this.desktopTime += delta;

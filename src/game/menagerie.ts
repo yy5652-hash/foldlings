@@ -100,6 +100,8 @@ export class Menagerie {
   private surfaces: Surface[] = [];
   private confetti: Confetti;
   private placedThisSession = false;
+  /** True in passthrough: spots refer to the player's real room. */
+  realRoom = false;
   private avoid = new Vector3(0, -10, 0);
   private tmp = new Vector3();
   private tmpQ = new Quaternion();
@@ -269,6 +271,10 @@ export class Menagerie {
   }
 
   /** Shows creatures saved on earlier visits, re-homing them if needed. */
+  /**
+   * `persist` false (VR, flat screen): homes are temporary and saved spots
+   * from the real room are neither used nor overwritten.
+   */
   restore(avoid: Vector3, persist: boolean) {
     if (this.placedThisSession) return;
     this.avoid.copy(avoid);
@@ -280,7 +286,7 @@ export class Menagerie {
       const { c, entity } = this.spawnEntity(s.kind, s.look);
       const live: Live = { c, entity, saved: s, travel: null, orbit: null, endAir: false };
       this.live.push(live);
-      if (this.room.restored && s.anchored) {
+      if (persist && this.room.restored && s.anchored) {
         c.root.position.fromArray(s.p);
         if (s.n) {
           c.root.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), new Vector3().fromArray(s.n));
@@ -362,7 +368,7 @@ export class Menagerie {
       look,
       p: rest.p,
       yaw: rest.yaw,
-      anchored: this.room.anchored,
+      anchored: this.realRoom && this.room.anchored,
     };
     if (rest.n) saved.n = rest.n;
     const live: Live = { c, entity, saved, travel: null, orbit: null, endAir: home.air };
