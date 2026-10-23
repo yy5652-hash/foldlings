@@ -1,0 +1,41 @@
+{
+  "mcp": {
+    "iwsdk-runtime": {
+      "type": "local",
+      "command": [
+        "node",
+        "/private/tmp/claude-501/-Users-hudsonyu-Documents-Codex-claude-local-projects-meta-vr-start-2026/3c337550-178b-4861-b903-d158911692e9/scratchpad/scaffold/foldlings/node_modules/@iwsdk/cli/dist/cli.js",
+        "mcp",
+        "stdio"
+      ],
+      "enabled": true
+    },
+    "iwsdk-reference": {
+      "type": "local",
+      "command": [
+        "node",
+        "/private/tmp/claude-501/-Users-hudsonyu-Documents-Codex-claude-local-projects-meta-vr-start-2026/3c337550-178b-4861-b903-d158911692e9/scratchpad/scaffold/foldlings/node_modules/@iwsdk/reference/dist/cli.js"
+      ],
+      "enabled": true
+    },
+    "metavr": {
+      "type": "local",
+      "command": [
+        "node",
+        "/private/tmp/claude-501/-Users-hudsonyu-Documents-Codex-claude-local-projects-meta-vr-start-2026/3c337550-178b-4861-b903-d158911692e9/scratchpad/scaffold/foldlings/node_modules/@meta-quest/metavr/bin.js",
+        "mcp",
+        "server"
+      ],
+      "enabled": true
+    }
+  },
+  "permission": {
+    "iwsdk-runtime_*": "allow",
+    "iwsdk-reference_*": "allow",
+    "metavr_*": "allow",
+    "skill": {
+      "iwsdk-*": "allow"
+    }
+  },
+  "$schema": "https://opencode.ai/config.json"
+}
