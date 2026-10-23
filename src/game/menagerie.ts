@@ -118,10 +118,14 @@ export class Menagerie {
     }
     this.confetti = new Confetti();
     world.createTransformEntity(this.confetti.mesh);
-    world.renderer.xr.addEventListener('sessionend', () => {
+    // Each mode (flat page, VR, passthrough) shows its own placement of the
+    // zoo, so switching modes starts the creatures afresh.
+    const reset = () => {
       this.placedThisSession = false;
       this.clearLive();
-    });
+    };
+    world.renderer.xr.addEventListener('sessionstart', reset);
+    world.renderer.xr.addEventListener('sessionend', reset);
   }
 
   get count(): number {
@@ -209,7 +213,9 @@ export class Menagerie {
     const pick = (kinds: Surface['kind'][], prefer: (s: Surface) => number) => {
       const list = this.surfaces
         .filter((s) => kinds.includes(s.kind))
-        .sort((a, b) => prefer(a) - prefer(b));
+        .map((s) => ({ s, score: prefer(s) }))
+        .sort((a, b) => a.score - b.score)
+        .map((x) => x.s);
       for (const s of list) {
         const p = sampleOn(s);
         if (p) {
@@ -223,14 +229,22 @@ export class Menagerie {
       }
       return null;
     };
-    const near = (s: Surface) => s.center.distanceTo(head) + Math.random() * 0.6;
+    // Prefer close surfaces that are not already crowded, with some chance.
+    const crowd = (s: Surface) =>
+      others.filter((o) =>
+        s.kind === 'wall'
+          ? Math.abs(this.tmp.copy(o).sub(s.center).dot(s.normal)) < 0.08
+          : Math.abs(o.y - s.center.y) < 0.12 && pointInPoly(o.x, o.z, s.polygon),
+      ).length;
+    const near = (s: Surface) =>
+      s.center.distanceTo(head) * 0.6 + crowd(s) * 0.45 + Math.random() * 0.5 + (s.kind === 'floor' ? 0.35 : 0);
     let home: Home | null = null;
     switch (habitat) {
       case 'ground':
-        home = pick(['table'], near) ?? pick(['floor'], near);
+        home = pick(['table', 'floor'], near);
         break;
       case 'perch':
-        home = pick(['table'], (s) => -s.center.y + Math.random() * 0.3);
+        home = pick(['table'], (s) => -s.center.y + crowd(s) * 0.3 + Math.random() * 0.3);
         break;
       case 'wall':
         home = pick(['wall'], near);
@@ -465,6 +479,14 @@ export class Menagerie {
       l.c.setTravelling(false);
       if (l.endAir) this.startOrbit(l);
     }
+  }
+
+  /** World positions of the creatures on show (tests, film). */
+  positions(): { kind: CreatureKind; p: [number, number, number] }[] {
+    return this.live.map((l) => {
+      const v = l.c.root.getWorldPosition(new Vector3());
+      return { kind: l.c.kind, p: [v.x, v.y, v.z] };
+    });
   }
 
   /** Wipes the zoo (settings: start over). */
