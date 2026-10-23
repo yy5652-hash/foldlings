@@ -16,39 +16,37 @@
         "handTracking": true,
         "anchors": true,
         "planeDetection": true,
-        "meshDetection": true
+        "meshDetection": true,
+        "gazeTracking": true
       }
     },
     "input": {
       "canvasPointerEvents": true
     },
     "render": {
-      "fov": 70,
-      "near": 0.001,
-      "far": 200,
+      "fov": 60,
+      "near": 0.01,
+      "far": 100,
       "camera": {
         "position": [
           0,
-          1.6,
-          1
+          1.2,
+          0.08
         ],
         "lookAt": [
           0,
-          0.95,
-          -1.95
+          0.74,
+          -0.42
         ]
       }
     },
     "features": {
       "locomotion": false,
-      "grabbing": true,
+      "grabbing": false,
       "physics": false,
       "sceneUnderstanding": true,
       "environmentRaycast": false,
-      "spatialUI": {
-        "kit": "horizon",
-        "preferredColorScheme": "dark"
-      }
+      "spatialUI": false
     }
   },
   "dev": {
