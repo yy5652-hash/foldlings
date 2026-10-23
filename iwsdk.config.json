@@ -52,7 +52,7 @@
   "dev": {
     "emulator": {
       "device": "metaQuest3",
-      "environment": "sunlit_living_room"
+      "environment": "home_office"
     }
   }
 }

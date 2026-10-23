@@ -112,6 +112,20 @@ export class GameSystem extends createSystem({
         game: this.game,
         zoo: this.zoo,
         world: this.world,
+        recenter: () => this.place(true),
+        planes: () =>
+          surfacesFromPlanes(this.planeInfos()).map((p) => ({
+            kind: p.kind,
+            label: p.label,
+            c: p.center.toArray().map((v) => +v.toFixed(2)),
+            n: p.normal.toArray().map((v) => +v.toFixed(2)),
+            size: (() => {
+              const xs = p.polygon.map((q) => q.x);
+              const zs = p.polygon.map((q) => q.z);
+              const ys = p.polygon.map((q) => q.y);
+              return [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs)].map((v) => +v.toFixed(2));
+            })(),
+          })),
         gallery: () => {
           const kinds = ['crane', 'frog', 'fox', 'fish', 'butterfly', 'boat', 'rabbit', 'whale'] as const;
           kinds.forEach((k, i) => {

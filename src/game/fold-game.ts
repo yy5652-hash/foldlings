@@ -22,11 +22,13 @@ import {
   closestOnConvex,
   lineChord,
   lineSide,
+  reflectPoint,
   V2,
 } from '../fold/geom.js';
 import {
   applyFold,
   applyFolds,
+  creaseLine,
   Facet,
   FoldSpec,
   foldPaper,
@@ -229,6 +231,42 @@ export class FoldGame {
       default:
         return '';
     }
+  }
+
+  /**
+   * Where a hand would pinch and where it would set down for the next fold of
+   * the known solution (board space). Used by tests and the film recorder.
+   */
+  nextFoldPoints(): { grab: V2; dest: V2 } | null {
+    const next = this.nextFold();
+    if (!next) return null;
+    const line = creaseLine(next);
+    const parts = splitPaper(this.paper, line, next.s);
+    if (!parts) return null;
+    // Pinch the moving-part vertex that is farthest from the crease, nudged
+    // a little inside the paper so the pinch lands on it.
+    let best = 0;
+    let grab: V2 = { x: 0, y: 0 };
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const f of parts.move) {
+      for (const p of f.poly) {
+        cx += p.x;
+        cy += p.y;
+        n++;
+        const d = next.s * lineSide(line, p);
+        if (d > best) {
+          best = d;
+          grab = { x: p.x, y: p.y };
+        }
+      }
+    }
+    cx /= n;
+    cy /= n;
+    grab = { x: grab.x + (cx - grab.x) * 0.06, y: grab.y + (cy - grab.y) * 0.06 };
+    const dest = reflectPoint(line, grab);
+    return { grab, dest };
   }
 
   /** The next fold of the known solution, if the paper is still on that path. */
