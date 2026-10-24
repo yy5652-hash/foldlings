@@ -329,16 +329,25 @@ export class Menagerie {
         break;
     }
     if (home) return home;
-    // Air, or no suitable surface: a spot floating around the player.
+    // Air, or no suitable surface: a spot floating around the player, kept
+    // inside the room (on the player's side of every scanned wall, with room
+    // to swim its circle).
     const high = habitat === 'high-air';
-    for (let i = 0; i < 30; i++) {
+    const walls = this.surfaces.filter((s) => s.kind === 'wall');
+    const inside = (p: Vector3, margin: number) =>
+      walls.every((w) => {
+        const headSide = this.tmp.copy(head).sub(w.center).dot(w.normal);
+        if (headSide <= 0) return true;
+        return this.tmp.copy(p).sub(w.center).dot(w.normal) >= margin;
+      });
+    for (let i = 0; i < 40; i++) {
       const ang = rand(-1.1, 1.1);
-      const r = high ? rand(1.4, 2.2) : rand(0.8, 1.5);
+      const r = high ? rand(1.0, 2.0) : rand(0.7, 1.4);
       const dir = fwd.clone().applyAxisAngle(new Vector3(0, 1, 0), ang);
       const p = head.clone().addScaledVector(dir, r);
       p.y = high ? head.y + rand(0.35, 0.7) : head.y + rand(-0.45, 0.1);
       if (habitat === 'ground') p.y = Math.max(0.02, head.y - 1.1);
-      if (clear(p, 0.3)) {
+      if (clear(p, 0.3) && inside(p, high ? 0.75 : 0.45)) {
         return { pos: p, normal: null, air: habitat !== 'ground', where: habitat === 'ground' ? 'floor' : '' };
       }
     }
