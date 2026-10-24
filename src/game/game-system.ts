@@ -27,6 +27,7 @@ import {
   tablePlacement,
 } from './placement.js';
 import { RoomFrame, safeGet, safeSet, surfacesFromPlanes } from './room.js';
+import { RoomScan } from './scan.js';
 import { makeDesk, VirtualRoom } from './virtual-room.js';
 
 /** Where the mat rests in the flat browser view. */
@@ -61,6 +62,8 @@ export class GameSystem extends createSystem({
   private celebrate: { t: number; level: Level; revealed: boolean; vanished: boolean } | null = null;
   private galleryItems: Creature[] = [];
   private vroom!: VirtualRoom;
+  private scan = new RoomScan();
+  private lastScan = -10;
   private desk!: Group;
   /** 'ar' shows the real room; 'vr' and 'desktop' show the virtual study. */
   private mode: 'desktop' | 'ar' | 'vr' = 'desktop';
@@ -81,6 +84,7 @@ export class GameSystem extends createSystem({
 
     this.vroom = new VirtualRoom();
     this.world.createTransformEntity(this.vroom.root);
+    this.world.createTransformEntity(this.scan.root);
     this.room = new RoomFrame(this.world);
     this.zoo = new Menagerie(this.world, this.room);
     this.game = new FoldGame(this.world, {
@@ -213,6 +217,14 @@ export class GameSystem extends createSystem({
     this.yawTo = next.yaw;
     this.moveT = 0;
     this.placed = next;
+    // Show what the headset sees of the room while the mat finds its spot.
+    if (this.mode === 'ar' && (force || this.sessionTime - this.lastScan > 3)) {
+      const surfaces = surfacesFromPlanes(this.planeInfos());
+      if (surfaces.length) {
+        this.lastScan = this.sessionTime;
+        this.scan.start(surfaces, head.getWorldPosition(new Vector3()), next.onSurface ? next.position : null);
+      }
+    }
     console.info(
       '[foldlings] mat placed:',
       next.label,
@@ -350,6 +362,7 @@ export class GameSystem extends createSystem({
     if (this.celebrate) this.updateCelebration(delta);
     this.game.update(delta, time);
     this.zoo.update(delta);
+    this.scan.update(delta);
     this.fitDesk();
     for (const c of this.galleryItems) c.update(delta);
   }

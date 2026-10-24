@@ -4,9 +4,13 @@
  */
 
 import {
+  AdditiveBlending,
   CanvasTexture,
   Color,
+  Group,
   Mesh,
+  RingGeometry,
+  SphereGeometry,
   DynamicDrawUsage,
   InstancedMesh,
   MeshBasicMaterial,
@@ -70,6 +74,79 @@ interface Travel {
   endQuat: Quaternion;
 }
 
+/** Where a travelling creature is at progress u (room frame). */
+function travelPoint(tr: Travel, u: number, out: Vector3): Vector3 {
+  const e = tr.mode === 'fly' ? u * u * (3 - 2 * u) : u;
+  out.copy(tr.from).lerp(tr.to, e);
+  if (tr.mode === 'fly') {
+    out.y += Math.sin(Math.PI * e) * tr.arc;
+  } else {
+    const k = (e * tr.hops) % 1;
+    out.y += Math.sin(Math.PI * k) * (tr.arc + 0.04 * (1 - u));
+  }
+  return out;
+}
+
+/**
+ * Holographic flight path and landing ring shown while a new creature heads
+ * to its home, so the player sees which real surface it chose.
+ */
+class HomeMarker {
+  readonly root = new Group();
+  private dots: InstancedMesh;
+  private ring: Mesh;
+  private life = -1;
+  private o = new Object3D();
+  private n = 40;
+
+  constructor() {
+    this.root.name = 'HomeMarker';
+    this.dots = new InstancedMesh(
+      new SphereGeometry(0.0045, 8, 6),
+      new MeshBasicMaterial({ color: 0x5ee8ff, transparent: true, depthWrite: false, blending: AdditiveBlending }),
+      this.n,
+    );
+    this.dots.frustumCulled = false;
+    const ring = new RingGeometry(0.045, 0.055, 40);
+    this.ring = new Mesh(
+      ring,
+      new MeshBasicMaterial({ color: 0x5ee8ff, transparent: true, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
+    );
+    this.root.add(this.dots, this.ring);
+    this.root.visible = false;
+  }
+
+  show(tr: Travel, normal: Vector3 | null) {
+    const p = new Vector3();
+    for (let i = 0; i < this.n; i++) {
+      travelPoint(tr, i / (this.n - 1), p);
+      this.o.position.copy(p);
+      this.o.updateMatrix();
+      this.dots.setMatrixAt(i, this.o.matrix);
+    }
+    this.dots.instanceMatrix.needsUpdate = true;
+    this.ring.position.copy(tr.to);
+    this.ring.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), normal ?? new Vector3(0, 1, 0));
+    this.ring.position.addScaledVector(normal ?? new Vector3(0, 1, 0), 0.004);
+    this.life = 0;
+    this.root.visible = true;
+  }
+
+  update(dt: number, total: number) {
+    if (this.life < 0) return;
+    this.life += dt;
+    const fade = this.life < total ? Math.min(1, this.life / 0.3) : Math.max(0, 1 - (this.life - total) / 0.8);
+    (this.dots.material as MeshBasicMaterial).opacity = 0.85 * fade;
+    const pulse = 1 + 0.25 * Math.sin(this.life * 8);
+    this.ring.scale.setScalar(pulse);
+    (this.ring.material as MeshBasicMaterial).opacity = 0.9 * fade;
+    if (fade <= 0 && this.life > total) {
+      this.life = -1;
+      this.root.visible = false;
+    }
+  }
+}
+
 /** Plain words for a surface, preferring the room scan's own label. */
 function describe(s: Surface): string {
   const label = s.label.toLowerCase().replace(/_/g, ' ');
@@ -97,6 +174,8 @@ export class Menagerie {
   private saved: SavedCreature[] = [];
   private surfaces: Surface[] = [];
   private confetti: Confetti;
+  private marker = new HomeMarker();
+  private markerTime = 0;
   private placedThisSession = false;
   /** True in passthrough: spots refer to the player's real room. */
   realRoom = false;
@@ -114,6 +193,7 @@ export class Menagerie {
     }
     this.confetti = new Confetti();
     world.createTransformEntity(this.confetti.mesh);
+    this.room.root.add(this.marker.root);
     // Each mode (flat page, VR, passthrough) shows its own placement of the
     // zoo, so switching modes starts the creatures afresh.
     const reset = () => {
@@ -404,6 +484,9 @@ export class Menagerie {
       arc: flying ? 0.25 + dist * 0.15 : 0.07,
       endQuat: rest.quat,
     };
+    const localNormal = rest.n ? new Vector3().fromArray(rest.n) : null;
+    this.marker.show(live.travel, localNormal);
+    this.markerTime = live.travel.dur + 1.4;
     this.saved.push(saved);
     this.save();
     return home.where;
@@ -411,6 +494,7 @@ export class Menagerie {
 
   update(dt: number) {
     this.confetti.update(dt);
+    this.marker.update(dt, this.markerTime);
     const head = this.head();
     for (const l of this.live) {
       l.c.update(dt);
@@ -454,15 +538,7 @@ export class Menagerie {
     const shadow = root.getObjectByName('Shadow');
     if (shadow) shadow.visible = u >= 1;
     l.c.setTravelling(tr.mode === 'fly' && u < 1);
-    const e = tr.mode === 'fly' ? u * u * (3 - 2 * u) : u;
-    const p = this.tmp.copy(tr.from).lerp(tr.to, e);
-    if (tr.mode === 'fly') {
-      p.y += Math.sin(Math.PI * e) * tr.arc;
-    } else {
-      const k = (e * tr.hops) % 1;
-      p.y += Math.sin(Math.PI * k) * (tr.arc + 0.04 * (1 - u));
-    }
-    root.position.copy(p);
+    root.position.copy(travelPoint(tr, u, this.tmp));
     if (u < 0.9) {
       const yaw = Math.atan2(tr.to.x - tr.from.x, tr.to.z - tr.from.z) + Math.PI;
       root.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), yaw);

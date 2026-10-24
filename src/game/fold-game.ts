@@ -20,6 +20,7 @@ import { rawCrease, snapCrease, Snap, Point3 } from '../fold/creases.js';
 import {
   applyAffine,
   closestOnConvex,
+  Line,
   lineChord,
   lineSide,
   reflectPoint,
@@ -43,6 +44,7 @@ import {
 import { BoardView } from './board-view.js';
 import { Button, IconKind } from './button.js';
 import { Guide } from './guide.js';
+import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
 import { PaperTextures } from './paper-texture.js';
 import { PaperView } from './paper-view.js';
@@ -101,6 +103,7 @@ export class FoldGame {
   inputLocked = false;
   isDaily = false;
   readonly guide = new Guide();
+  readonly xray = new Xray();
   private idle = 0;
   private hintTimer = 0;
   private message = '';
@@ -128,6 +131,7 @@ export class FoldGame {
     this.paperView = new PaperView(this.textures);
     this.boardRoot.add(this.paperView.root);
     this.boardRoot.add(this.guide.root);
+    world.createTransformEntity(this.xray.root);
 
     // The fold surface takes rays, gaze and the desktop mouse.
     const hit = world.createTransformEntity(this.board.hitPlane, this.boardEntity);
@@ -472,6 +476,7 @@ export class FoldGame {
   private endDrag() {
     // Settle on where the hand is now, not where it was last frame.
     if (this.drag) this.updateDrag(0, true);
+    this.xray.hideSolver();
     const d = this.drag;
     this.drag = null;
     this.board.showCrease(null);
@@ -497,6 +502,11 @@ export class FoldGame {
       if (world) this.toBoard(world, d.hand);
     }
     this.updateCursors(frame);
+    const ref = this.world.renderer.xr.getReferenceSpace();
+    if (this.xray.enabled && ref) {
+      this.world.player.updateWorldMatrix(true, false);
+      this.xray.updateHands(frame, ref, this.world.player.matrixWorld);
+    }
   }
 
   /**
@@ -562,6 +572,25 @@ export class FoldGame {
     this.messageTimer = seconds;
   }
 
+  private boardPoint(x: number, y: number, h: number): Vector3 {
+    return this.boardRoot.localToWorld(new Vector3(x, h, -y));
+  }
+
+  /** Feeds the X-ray view with the live crease computation. */
+  private showSolver(d: Drag, raw: Line | null) {
+    const p = this.boardPoint(d.p.x, d.p.y, 0.003);
+    const h = this.boardPoint(d.hand.x, d.hand.y, Math.max(0, d.hand.h));
+    let ends: [Vector3, Vector3] | null = null;
+    if (raw) {
+      const fx = raw.nx * raw.d;
+      const fy = raw.ny * raw.d;
+      const tx = -raw.ny * 0.24;
+      const ty = raw.nx * 0.24;
+      ends = [this.boardPoint(fx - tx, fy - ty, 0.006), this.boardPoint(fx + tx, fy + ty, 0.006)];
+    }
+    this.xray.showSolver(p, h, ends);
+  }
+
   private updateGuide(dt: number) {
     const busy = this.drag !== null || this.settle !== null || this.solved || this.inputLocked;
     this.idle = busy ? 0 : this.idle + dt;
@@ -592,6 +621,7 @@ export class FoldGame {
     const d = this.drag!;
     const raw = rawCrease(d.p, d.hand);
     const snap = raw ? snapCrease(raw, d.p, this.paper, d.snap) : null;
+    if (this.xray.enabled) this.showSolver(d, raw);
     const changed =
       (snap === null) !== (d.snap === null) ||
       (snap && d.snap && (snap.f !== d.snap.f || snap.k !== d.snap.k || snap.s !== d.snap.s));
