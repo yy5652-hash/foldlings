@@ -340,23 +340,24 @@ export class Menagerie {
         if (headSide <= 0) return true;
         return this.tmp.copy(p).sub(w.center).dot(w.normal) >= margin;
       });
-    for (let i = 0; i < 40; i++) {
-      const ang = rand(-1.1, 1.1);
-      const r = high ? rand(1.0, 2.0) : rand(0.7, 1.4);
+    for (let i = 0; i < 60; i++) {
+      // In front first; if the room is tight there, anywhere around.
+      const ang = i < 25 ? rand(-1.1, 1.1) : rand(-Math.PI, Math.PI);
+      const r = high ? rand(0.8, 2.0) : rand(0.6, 1.4);
       const dir = fwd.clone().applyAxisAngle(new Vector3(0, 1, 0), ang);
       const p = head.clone().addScaledVector(dir, r);
       p.y = high ? head.y + rand(0.35, 0.7) : head.y + rand(-0.45, 0.1);
       if (habitat === 'ground') p.y = Math.max(0.02, head.y - 1.1);
-      if (clear(p, 0.3) && inside(p, high ? 0.75 : 0.45)) {
+      if (clear(p, 0.3) && inside(p, high ? 0.6 : 0.4)) {
         return { pos: p, normal: null, air: habitat !== 'ground', where: habitat === 'ground' ? 'floor' : '' };
       }
     }
-    return {
-      pos: head.clone().addScaledVector(fwd, 1.2).setY(head.y),
-      normal: null,
-      air: true,
-      where: '',
-    };
+    // Last resort: the middle of the scanned room, a little above the head.
+    const centre = walls.length
+      ? walls.reduce((a, w) => a.add(w.center), new Vector3()).multiplyScalar(1 / walls.length)
+      : head.clone().addScaledVector(fwd, 1.0);
+    centre.y = head.y + (high ? 0.45 : 0.1);
+    return { pos: centre, normal: null, air: true, where: '' };
   }
 
   private spawnEntity(kind: CreatureKind, look: number): { c: Creature; entity: Entity } {
