@@ -71,7 +71,7 @@ interface Settle {
   dur: number;
 }
 
-const NEAR_HEIGHT = 0.07;
+const NEAR_HEIGHT = 0.09;
 const NEAR_MARGIN = 0.025;
 
 export interface FoldGameEvents {
@@ -79,6 +79,8 @@ export interface FoldGameEvents {
   onRecenter?: () => void;
   onDaily?: () => void;
   onSound?: () => void;
+  /** Small collection line for the goal card ("Zoo 7 · 3-day streak"). */
+  footer?: () => string;
 }
 
 export class FoldGame {
@@ -118,6 +120,7 @@ export class FoldGame {
   private tmp = new Vector3();
   private tmp2 = new Vector3();
   private cursors: Mesh[] = [];
+  private cursorHand: Point3 = { x: 0, y: 0, h: 0 };
   private plane = new Plane();
   private ray = new Ray();
 
@@ -214,7 +217,7 @@ export class FoldGame {
       if (s) this.prefixes.push(rasterize(s));
     }
     this.textures.setLook(level.look, seed);
-    this.board.setGoal(this.targetFacets, level.look, level.name, subtitle);
+    this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '');
     this.restart();
   }
 
@@ -533,7 +536,7 @@ export class FoldGame {
         this.tmp.set((ta.x + tb.x) / 2, (ta.y + tb.y) / 2, (ta.z + tb.z) / 2);
         this.world.player.updateWorldMatrix(true, false);
         this.tmp.applyMatrix4(this.world.player.matrixWorld);
-        const hand: Point3 = { x: 0, y: 0, h: 0 };
+        const hand = this.cursorHand;
         this.toBoard(this.tmp, hand);
         if (hand.h > 0.14 || hand.h < -0.03) continue;
         const p = this.grabPoint(hand);
@@ -555,6 +558,8 @@ export class FoldGame {
   // ---------------------------------------------------------------- update
 
   update(dt: number, time: number) {
+    // A long blur (system menu, headset off) must not jump the animations.
+    dt = Math.min(dt, 0.1);
     this.time = time;
     for (const b of this.buttons) b.update(dt);
     this.board.update(dt);

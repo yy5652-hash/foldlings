@@ -5,17 +5,13 @@
 
 import { Object3D, Vector3 } from '@iwsdk/core';
 import { MAT_D, MAT_W } from './board-view.js';
+import type { Surface } from './room.js';
 
 export interface Placement {
   position: Vector3;
   yaw: number;
   onSurface: boolean;
   label: string;
-}
-
-export interface PlaneInfo {
-  object: Object3D;
-  plane: XRPlane;
 }
 
 const REACH = 0.42;
@@ -54,25 +50,17 @@ export function floatingPlacement(head: Object3D): Placement {
   };
 }
 
-/** Best table-like plane under the reach zone, or null. */
-export function tablePlacement(head: Object3D, planes: PlaneInfo[]): Placement | null {
+/** Best table-like surface under the reach zone, or null. */
+export function tablePlacement(head: Object3D, surfaces: Surface[]): Placement | null {
   const { pos, fwd, yaw } = headPose(head);
-  const up = new Vector3();
   let best: Placement | null = null;
   let bestScore = Infinity;
-  for (const { object, plane } of planes) {
-    if (plane.orientation !== 'horizontal') continue;
-    object.updateWorldMatrix(true, false);
-    up.set(0, 1, 0).transformDirection(object.matrixWorld);
-    if (up.y < 0.9) continue;
-    const height = object.matrixWorld.elements[13];
+  for (const s of surfaces) {
+    if (s.kind !== 'table' || s.polygon.length < 3) continue;
+    const height = s.center.y;
     // Tables sit well below the eyes and well above the floor.
     if (height < 0.35 || height > pos.y - 0.15 || height < pos.y - 1.0) continue;
-    const poly = plane.polygon.map((p) => {
-      const w = new Vector3(p.x, 0, p.z).applyMatrix4(object.matrixWorld);
-      return { x: w.x, z: w.z };
-    });
-    if (poly.length < 3) continue;
+    const poly = s.polygon.map((p) => ({ x: p.x, z: p.z }));
     let cx = 0;
     let cz = 0;
     for (const p of poly) {
@@ -80,7 +68,7 @@ export function tablePlacement(head: Object3D, planes: PlaneInfo[]): Placement |
       cz += p.z / poly.length;
     }
     const want = { x: pos.x + fwd.x * REACH, z: pos.z + fwd.z * REACH };
-    // Slide from the ideal spot towards the plane centre until the mat fits.
+    // Slide from the ideal spot towards the surface centre until the mat fits.
     const right = { x: -fwd.z, z: fwd.x };
     let spot: { x: number; z: number } | null = null;
     for (let t = 0; t <= 1.0001; t += 0.1) {
@@ -100,17 +88,27 @@ export function tablePlacement(head: Object3D, planes: PlaneInfo[]): Placement |
         break;
       }
     }
+    let fits = spot !== null;
     if (!spot) {
-      // Small surface: use its centre if it is in reach at all.
+      // Smaller surface: its centre will do if most of the mat still lands on it.
       if (!pointInPolygon(cx, cz, poly)) continue;
+      const xs = poly.map((p) => p.x);
+      const zs = poly.map((p) => p.z);
+      const w = Math.max(...xs) - Math.min(...xs);
+      const d = Math.max(...zs) - Math.min(...zs);
+      if (Math.min(w, d) < 0.38 || Math.max(w, d) < 0.45) continue;
       spot = { x: cx, z: cz };
+      fits = false;
     }
     const reach = Math.hypot(spot.x - pos.x, spot.z - pos.z);
     if (reach > 0.85) continue;
-    const label = (plane as XRPlane & { semanticLabel?: string }).semanticLabel ?? '';
+    const label = s.label;
     const score =
       Math.hypot(spot.x - want.x, spot.z - want.z) +
-      0.5 * Math.abs(height - (pos.y - DESK_DROP)) -
+      0.5 * Math.abs(height - (pos.y - DESK_DROP)) +
+      (fits ? 0 : 0.3) +
+      // Unlabelled boxes are often chairs or stools; real tables win.
+      (label === 'other' || label === '' ? 0.5 : 0) -
       (label === 'table' || label === 'desk' ? 0.15 : 0);
     if (score < bestScore) {
       bestScore = score;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rawCrease, snapCrease } from './creases.js';
+import { onBoard, rawCrease, snapCrease } from './creases.js';
 import { applyAffine, polygonArea } from './geom.js';
 import {
   applyFolds,
@@ -90,6 +90,22 @@ describe('crease from a hand motion', () => {
 
   it('lifting straight up does not fold', () => {
     expect(rawCrease({ x: 0.1, y: 0.1 }, { x: 0.101, y: 0.1, h: 0.1 })).toBeNull();
+  });
+
+  it('never picks a crease that would carry paper off the mat', () => {
+    // Paper already pushed to the right edge; folding its left edge further
+    // right along u = 0.15 would leave the board, so the snap must refuse.
+    const shifted = applyFolds([
+      { f: 'u', k: 0, s: -1 }, // left half over to the right: paper now x ∈ [0, 0.1]
+    ])!;
+    expect(onBoard(shifted)).toBe(true);
+    const p = { x: 0.004, y: 0.02 };
+    const raw = rawCrease(p, { x: 0.3, y: 0.02, h: 0.02 })!;
+    const snap = snapCrease(raw, p, shifted);
+    if (snap) {
+      const folded = applyFolds([{ f: snap.f, k: snap.k, s: snap.s }], shifted)!;
+      expect(onBoard(folded)).toBe(true);
+    }
   });
 
   it('half fold from the right edge snaps to the centre line', () => {

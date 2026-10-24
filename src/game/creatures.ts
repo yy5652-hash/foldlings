@@ -383,6 +383,17 @@ export class Creature {
     }
   }
 
+  /** A small unprompted stir, so a resting zoo still looks alive. */
+  fidget(withSound: boolean) {
+    if (this.react > 0.1 || this.hop > 0.1) return;
+    this.react = 0.55;
+    this.hop = this.kind === 'frog' || this.kind === 'rabbit' ? 0.7 : 0.3;
+    if (!withSound) return;
+    if (this.kind === 'frog') sfx.croak();
+    else if (this.kind === 'crane' || this.kind === 'butterfly') sfx.flutter();
+    else if (this.kind === 'fox' || this.kind === 'rabbit') sfx.chirp(this.kind === 'rabbit' ? 1.3 : 0.9);
+  }
+
   /** Flying or swimming kinds flap while travelling. */
   setTravelling(v: boolean) {
     this.travelling = v;

@@ -31,6 +31,7 @@ import { RoomFrame, safeGet, safeSet, Surface } from './room.js';
 import { sfx } from './sfx.js';
 
 const SAVE_KEY = 'foldlings.zoo.v1';
+const UP = new Vector3(0, 1, 0);
 const MAX_SHOWN = 18;
 
 export interface SavedCreature {
@@ -320,7 +321,10 @@ export class Menagerie {
         home = pick(['table', 'floor'], near);
         break;
       case 'perch':
-        home = pick(['table'], (s) => -s.center.y + crowd(s) * 0.3 + Math.random() * 0.3);
+        // Up high, but not above the player's view.
+        home = pick(['table'], (s) =>
+          (s.center.y > head.y + 0.6 ? 2 : -s.center.y) + crowd(s) * 0.3 + Math.random() * 0.3,
+        );
         break;
       case 'wall':
         home = pick(['wall'], near);
@@ -508,6 +512,8 @@ export class Menagerie {
     const head = this.head();
     for (const l of this.live) {
       l.c.update(dt);
+      // Now and then a resting creature stirs on its own (about every 40 s).
+      if (!l.travel && Math.random() < dt / 40) l.c.fidget(Math.random() < 0.3);
       if (l.travel) this.stepTravel(l, dt, head);
       else if (l.orbit) {
         const o = l.orbit;
@@ -551,7 +557,7 @@ export class Menagerie {
     root.position.copy(travelPoint(tr, u, this.tmp));
     if (u < 0.9) {
       const yaw = Math.atan2(tr.to.x - tr.from.x, tr.to.z - tr.from.z) + Math.PI;
-      root.quaternion.setFromAxisAngle(new Vector3(0, 1, 0), yaw);
+      root.quaternion.setFromAxisAngle(UP, yaw);
     } else {
       root.quaternion.slerp(tr.endQuat, Math.min(1, dt * 8));
     }

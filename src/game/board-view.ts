@@ -271,7 +271,7 @@ export class BoardView {
     this.outline.visible = v;
   }
 
-  setGoal(facets: readonly Facet[], look: PaperLook, title: string, subtitle: string) {
+  setGoal(facets: readonly Facet[], look: PaperLook, title: string, subtitle: string, footer = '') {
     this.buildOutline(facets);
     this.outline.visible = true;
     const g = this.ghostCanvas.getContext('2d')!;
@@ -305,7 +305,13 @@ export class BoardView {
     c.fillText(title, 256, 560);
     c.fillStyle = '#8a7a6a';
     c.font = '500 34px system-ui, -apple-system, Segoe UI, sans-serif';
-    c.fillText(subtitle, 256, 612);
+    c.fillText(subtitle, 256, footer ? 600 : 612);
+    if (footer) {
+      // Collection line, e.g. "Zoo 7 · 3-day streak".
+      c.fillStyle = '#b0795a';
+      c.font = '600 24px system-ui, -apple-system, Segoe UI, sans-serif';
+      c.fillText(footer.toUpperCase(), 256, 630);
+    }
     this.cardTex.needsUpdate = true;
   }
 

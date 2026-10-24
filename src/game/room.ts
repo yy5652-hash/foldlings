@@ -6,6 +6,19 @@
 
 import { Group, Matrix4, Object3D, Vector3, World } from '@iwsdk/core';
 
+export interface PlaneInfo {
+  object: Object3D;
+  plane: XRPlane;
+}
+
+/** A bounded furniture volume from mesh detection (local-space box). */
+export interface MeshInfo {
+  object: Object3D;
+  label: string;
+  min: ArrayLike<number>;
+  max: ArrayLike<number>;
+}
+
 export type SurfaceKind = 'floor' | 'table' | 'wall';
 
 export interface Surface {
@@ -17,7 +30,64 @@ export interface Surface {
   center: Vector3;
 }
 
-export function surfacesFromPlanes(planes: { object: Object3D; plane: XRPlane }[]): Surface[] {
+/** Furniture the headset models as boxes (couch, table, bed, storage…) → their tops. */
+const TOP_LABELS = new Set(['table', 'desk', 'couch', 'sofa', 'bed', 'storage', 'shelf', 'nightstand', 'other']);
+
+export function surfacesFromMeshes(meshes: MeshInfo[]): Surface[] {
+  const out: Surface[] = [];
+  const up = new Vector3();
+  for (const { object, label, min, max } of meshes) {
+    const l = label.toLowerCase();
+    if (!TOP_LABELS.has(l)) continue;
+    if (max[0] - min[0] < 0.15 || max[2] - min[2] < 0.15) continue;
+    object.updateWorldMatrix(true, false);
+    up.set(0, 1, 0).transformDirection(object.matrixWorld);
+    if (up.y < 0.9) continue;
+    const polygon = [
+      new Vector3(min[0], max[1], min[2]),
+      new Vector3(max[0], max[1], min[2]),
+      new Vector3(max[0], max[1], max[2]),
+      new Vector3(min[0], max[1], max[2]),
+    ].map((p) => p.applyMatrix4(object.matrixWorld));
+    const center = polygon
+      .reduce((a, p) => a.add(p), new Vector3())
+      .multiplyScalar(1 / polygon.length);
+    if (center.y < 0.2) continue;
+    out.push({ kind: 'table', label: l, polygon, normal: up.clone(), center });
+  }
+  return out;
+}
+
+/**
+ * Everything the room offers: planes first, then furniture tops that no plane
+ * already covers (some runtimes expose a table both ways).
+ */
+export function roomSurfaces(planes: PlaneInfo[], meshes: MeshInfo[]): Surface[] {
+  const out = surfacesFromPlanes(planes);
+  const box = (s: Surface) => {
+    const xs = s.polygon.map((p) => p.x);
+    const zs = s.polygon.map((p) => p.z);
+    return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs) };
+  };
+  for (const m of surfacesFromMeshes(meshes)) {
+    const b = box(m);
+    const areaB = (b.x1 - b.x0) * (b.z1 - b.z0);
+    // A plane over the same footprint is the better top (a box may reach a
+    // headboard or backrest), whatever its height.
+    const dup = out.some((s) => {
+      if (s.kind !== 'table') return false;
+      const a = box(s);
+      const ox = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+      const oz = Math.max(0, Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0));
+      const areaA = (a.x1 - a.x0) * (a.z1 - a.z0);
+      return (ox * oz) / Math.max(1e-6, Math.min(areaA, areaB)) > 0.6;
+    });
+    if (!dup) out.push(m);
+  }
+  return out;
+}
+
+export function surfacesFromPlanes(planes: PlaneInfo[]): Surface[] {
   const out: Surface[] = [];
   const up = new Vector3();
   for (const { object, plane } of planes) {

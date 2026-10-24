@@ -13,10 +13,11 @@ import {
   BOARD,
   Crease,
   creaseLine,
+  foldPaper,
   FoldSpec,
   GRID,
+  paperBounds,
   PaperState,
-  splitPaper,
 } from './paper.js';
 
 function range(lo: number, hi: number): number[] {
@@ -75,10 +76,17 @@ function lineDistanceNear(raw: Line, cand: Line, p: V2): number {
   return worst;
 }
 
+/** True when every facet stays on the mat's board area. */
+export function onBoard(paper: PaperState): boolean {
+  const b = paperBounds(paper);
+  const e = 1e-6;
+  return b.minX >= BOARD.minX - e && b.maxX <= BOARD.maxX + e && b.minY >= BOARD.minY - e && b.maxY <= BOARD.maxY + e;
+}
+
 /**
- * Picks the lattice crease closest to `raw` that leaves P on the moving side
- * and actually splits the paper. `prev` gets a small sticky bonus so the
- * crease does not flicker between two neighbours.
+ * Picks the lattice crease closest to `raw` that leaves P on the moving side,
+ * actually splits the paper and keeps it on the mat. `prev` gets a small
+ * sticky bonus so the crease does not flicker between two neighbours.
  */
 export function snapCrease(
   raw: Line,
@@ -99,7 +107,8 @@ export function snapCrease(
     const sticky = prev && prev.f === c.f && prev.k === c.k ? 0.007 : 0;
     const score = error - sticky;
     if (score >= bestScore) continue;
-    if (!splitPaper(paper, line, s)) continue;
+    const folded = foldPaper(paper, line, s);
+    if (!folded || !onBoard(folded)) continue;
     bestScore = score;
     best = { ...c, s, line, error };
   }

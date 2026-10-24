@@ -12,6 +12,7 @@ import {
   HemisphereLight,
   Vector3,
   VisibilityState,
+  XRMesh,
   XRPlane,
 } from '@iwsdk/core';
 import { paperBounds } from '../fold/paper.js';
@@ -20,13 +21,16 @@ import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Menagerie } from './menagerie.js';
+import { floatingPlacement, Placement, tablePlacement } from './placement.js';
 import {
-  floatingPlacement,
-  Placement,
+  MeshInfo,
   PlaneInfo,
-  tablePlacement,
-} from './placement.js';
-import { RoomFrame, safeGet, safeSet, surfacesFromPlanes } from './room.js';
+  RoomFrame,
+  roomSurfaces,
+  safeGet,
+  safeSet,
+  Surface,
+} from './room.js';
 import { RoomScan } from './scan.js';
 import { makeDesk, VirtualRoom } from './virtual-room.js';
 
@@ -44,6 +48,7 @@ interface Progress {
 
 export class GameSystem extends createSystem({
   planes: { required: [XRPlane] },
+  meshes: { required: [XRMesh] },
 }) {
   game!: FoldGame;
   private room!: RoomFrame;
@@ -64,6 +69,7 @@ export class GameSystem extends createSystem({
   private vroom!: VirtualRoom;
   private scan = new RoomScan();
   private lastScan = -10;
+  private scanHinted = false;
   private desk!: Group;
   /** 'ar' shows the real room; 'vr' and 'desktop' show the virtual study. */
   private mode: 'desktop' | 'ar' | 'vr' = 'desktop';
@@ -93,6 +99,12 @@ export class GameSystem extends createSystem({
         this.celebrate = { t: 0, level, revealed: false, vanished: false };
       },
       onDaily: () => this.toggleDaily(),
+      footer: () => {
+        const n = this.zoo.count;
+        const k = this.streak();
+        if (!n) return '';
+        return `Zoo ${n}` + (k > 0 ? ` · ${k}-day streak` : '');
+      },
       onSound: () => {
         setMuted(!isMuted());
         this.progress.muted = isMuted();
@@ -117,6 +129,7 @@ export class GameSystem extends createSystem({
         zoo: this.zoo,
         world: this.world,
         recenter: () => this.place(true),
+        placement: () => this.placed && { label: this.placed.label, onSurface: this.placed.onSurface, p: this.placed.position.toArray().map((v) => +v.toFixed(2)) },
         resetAll: () => {
           this.zoo.reset();
           this.progress = { level: 0, solved: [], daily: [], muted: false };
@@ -126,7 +139,7 @@ export class GameSystem extends createSystem({
         audio: () => ({ ctx: audioContext(), master: audioDestination() }),
         stopMusic: () => stopMusic(),
         planes: () =>
-          surfacesFromPlanes(this.planeInfos()).map((p) => ({
+          this.roomSurfaces().map((p) => ({
             kind: p.kind,
             label: p.label,
             c: p.center.toArray().map((v) => +v.toFixed(2)),
@@ -158,6 +171,7 @@ export class GameSystem extends createSystem({
     this.world.renderer.xr.addEventListener('sessionstart', () => {
       startMusic();
       this.sessionTime = 0;
+      this.scanHinted = false;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
       this.setMode(blend && blend !== 'opaque' ? 'ar' : 'vr');
@@ -202,11 +216,30 @@ export class GameSystem extends createSystem({
     return out;
   }
 
+  private meshInfos(): MeshInfo[] {
+    const out: MeshInfo[] = [];
+    for (const e of this.queries.meshes.entities) {
+      if (!e.object3D || !e.getValue(XRMesh, 'isBounded3D')) continue;
+      out.push({
+        object: e.object3D,
+        label: (e.getValue(XRMesh, 'semanticLabel') as string | undefined) ?? '',
+        min: e.getVectorView(XRMesh, 'min'),
+        max: e.getVectorView(XRMesh, 'max'),
+      });
+    }
+    return out;
+  }
+
+  /** Planes plus furniture tops, in world space. */
+  private roomSurfaces(): Surface[] {
+    return roomSurfaces(this.planeInfos(), this.meshInfos());
+  }
+
   /** Picks a spot; `force` re-places even if already on a table. */
   private place(force: boolean) {
     if (!force && this.placed?.onSurface) return;
     const head = this.player.head;
-    const table = this.mode === 'ar' ? tablePlacement(head, this.planeInfos()) : null;
+    const table = this.mode === 'ar' ? tablePlacement(head, this.roomSurfaces()) : null;
     const next = table ?? (force || !this.placed ? floatingPlacement(head) : null);
     if (!next) return;
     const root = this.game.boardRoot;
@@ -219,7 +252,7 @@ export class GameSystem extends createSystem({
     this.placed = next;
     // Show what the headset sees of the room while the mat finds its spot.
     if (this.mode === 'ar' && (force || this.sessionTime - this.lastScan > 3)) {
-      const surfaces = surfacesFromPlanes(this.planeInfos());
+      const surfaces = this.roomSurfaces();
       if (surfaces.length) {
         this.lastScan = this.sessionTime;
         this.scan.start(surfaces, head.getWorldPosition(new Vector3()), next.onSurface ? next.position : null);
@@ -317,6 +350,7 @@ export class GameSystem extends createSystem({
 
   update(delta: number, time: number): void {
     if (this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
+    delta = Math.min(delta, 0.1);
     const frame = this.world.session ? this.world.renderer.xr.getFrame() : null;
     this.room.update(frame, delta);
     if (this.sessionTime >= 0) {
@@ -331,13 +365,19 @@ export class GameSystem extends createSystem({
         this.sessionTime < 10 &&
         !this.game.busy
       ) {
-        const table = tablePlacement(this.player.head, this.planeInfos());
+        const table = tablePlacement(this.player.head, this.roomSurfaces());
         if (table) this.place(false);
       }
       this.surfaceClock -= delta;
       if (this.mode === 'ar' && this.surfaceClock <= 0) {
         this.surfaceClock = 1;
-        this.zoo.setSurfaces(surfacesFromPlanes(this.planeInfos()));
+        const surfaces = this.roomSurfaces();
+        this.zoo.setSurfaces(surfaces);
+        // No room scan: say so once, so the floating mat is not a surprise.
+        if (!this.scanHinted && this.sessionTime > 6 && surfaces.length === 0) {
+          this.scanHinted = true;
+          this.game.say('No room scan found. Run Space Setup so creatures can live on your furniture.', 7);
+        }
       }
       if (this.room.ready && this.sessionTime > 2.5 && this.moveT >= 1) {
         const n = this.zoo.restore(this.boardWorld(), this.mode === 'ar');
