@@ -410,6 +410,9 @@ export class FoldGame {
     if (hand.h > NEAR_HEIGHT || hand.h < -0.03) return;
     const p = this.grabPoint(hand);
     if (!p) return;
+    // The same pinch may already have started a ray drag through the far
+    // pointer; the near drag takes over, so let go of that pointer.
+    if (this.drag?.kind === 'ray') this.board.hitPlane.releasePointerCapture?.(this.drag.pointerId);
     this.beginDrag('near', e.inputSource, -1, p, hand);
   }
 

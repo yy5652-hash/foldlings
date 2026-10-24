@@ -113,6 +113,13 @@ export class RoomScan {
   start(surfaces: Surface[], origin: Vector3, chosen: Vector3 | null) {
     this.clear();
     this.origin.copy(origin);
+    // Label only the nearest few so a busy room does not become a wall of text.
+    const labelled = new Set(
+      [...surfaces]
+        .filter((s) => s.kind !== 'floor')
+        .sort((a, b) => a.center.distanceTo(origin) - b.center.distanceTo(origin))
+        .slice(0, 8),
+    );
     for (const s of surfaces) {
       if (s.polygon.length < 3) continue;
       const pos: number[] = [];
@@ -158,7 +165,7 @@ export class RoomScan {
       mesh.frustumCulled = false;
       this.root.add(mesh);
       let label: Sprite | null = null;
-      if (s.kind !== 'floor' || surfaces.length < 4) {
+      if (labelled.has(s) || (s.kind === 'floor' && surfaces.length < 4)) {
         label = new Sprite(
           new SpriteMaterial({ map: labelTexture(niceLabel(s)), transparent: true, depthWrite: false, depthTest: false }),
         );
