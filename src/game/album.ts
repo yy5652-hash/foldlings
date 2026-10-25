@@ -62,6 +62,7 @@ export class Album {
       sfx.click();
       this.hide();
     });
+    this.close.root.name = 'AlbumClose';
     this.close.root.scale.setScalar(0.7);
     this.close.root.rotation.x = Math.PI / 2;
     this.close.root.position.set(W / 2 - 0.03, H / 2 - 0.03, 0.004);

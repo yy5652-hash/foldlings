@@ -122,6 +122,7 @@ export class PalmMenu {
     this.panel.position.set(0, -50, 0);
 
     this.token = new Button('menu', () => this.toggle());
+    this.token.root.name = 'PalmToken';
     this.token.root.scale.setScalar(0.62);
     this.token.root.visible = false;
     world.scene.add(this.token.root);

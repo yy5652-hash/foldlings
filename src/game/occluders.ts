@@ -64,6 +64,15 @@ export function polygonGeometry(points: Vector3[]): BufferGeometry {
   return geometry;
 }
 
+/**
+ * The seat the player sits on (or anything their head is over) would sit
+ * between their eyes and the mat, so it never occludes.
+ */
+function underHead(head: Vector3, x0: number, x1: number, z0: number, z1: number): boolean {
+  const m = 0.35;
+  return head.x > x0 - m && head.x < x1 + m && head.z > z0 - m && head.z < z1 + m;
+}
+
 export class Occluders {
   readonly root = new Group();
   private material = new MeshBasicMaterial({
@@ -77,19 +86,61 @@ export class Occluders {
     this.root.name = 'Occluders';
   }
 
-  /** Scan-change rebuild; this is not a per-frame update. Keep root in world space. */
-  update(planes: PlaneInfo[], meshes: MeshInfo[]): void {
+  /**
+   * Scan-change rebuild; this is not a per-frame update. Keep root in world
+   * space. `keepClear` is the mat: the furniture it stands on never hides it.
+   */
+  update(planes: PlaneInfo[], meshes: MeshInfo[], keepClear: Vector3 | null = null, head: Vector3 | null = null): void {
     for (const child of this.root.children) {
       (child as Mesh).geometry.dispose();
     }
     this.root.clear();
+    const tops = surfacesFromPlanes(planes).filter((s) => s.kind === 'table');
+    const corner = new Vector3();
     for (const { object, min, max } of meshes) {
       object.updateWorldMatrix(true, false);
-      this.add(boxGeometry(min, max, object.matrixWorld));
+      // World footprint and top of the box.
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = -Infinity;
+      for (let i = 0; i < 8; i++) {
+        corner.set(i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]).applyMatrix4(object.matrixWorld);
+        x0 = Math.min(x0, corner.x);
+        x1 = Math.max(x1, corner.x);
+        z0 = Math.min(z0, corner.z);
+        z1 = Math.max(z1, corner.z);
+        top = Math.max(top, corner.y);
+      }
+      if (keepClear && keepClear.x > x0 && keepClear.x < x1 && keepClear.z > z0 && keepClear.z < z1 && top < keepClear.y + 0.2) {
+        continue;
+      }
+      if (head && underHead(head, x0, x1, z0, z1)) continue;
+      // A detected tabletop over the same footprint is where things really
+      // rest; the box may reach higher (a lip, a backrest), so cut it down.
+      let lower = LOWER;
+      for (const t of tops) {
+        const y = t.center.y;
+        if (y >= top || top - y > 0.25) continue;
+        let tx0 = Infinity, tx1 = -Infinity, tz0 = Infinity, tz1 = -Infinity;
+        for (const p of t.polygon) {
+          tx0 = Math.min(tx0, p.x);
+          tx1 = Math.max(tx1, p.x);
+          tz0 = Math.min(tz0, p.z);
+          tz1 = Math.max(tz1, p.z);
+        }
+        const ox = Math.max(0, Math.min(x1, tx1) - Math.max(x0, tx0));
+        const oz = Math.max(0, Math.min(z1, tz1) - Math.max(z0, tz0));
+        const smaller = Math.min((x1 - x0) * (z1 - z0), (tx1 - tx0) * (tz1 - tz0));
+        if (smaller > 0 && (ox * oz) / smaller > 0.3) lower = Math.max(lower, top - y + LOWER);
+      }
+      this.add(boxGeometry(min, max, object.matrixWorld, SHRINK, lower));
     }
     for (const surface of surfacesFromPlanes(planes)) {
       if (surface.kind === 'floor') continue;
       if (surface.kind === 'table') {
+        if (head) {
+          const xs = surface.polygon.map((p) => p.x);
+          const zs = surface.polygon.map((p) => p.z);
+          if (underHead(head, Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs))) continue;
+        }
         for (const point of surface.polygon) point.y -= LOWER;
       }
       this.add(polygonGeometry(surface.polygon));

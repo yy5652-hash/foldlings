@@ -199,6 +199,10 @@ export class GameSystem extends createSystem({
             })(),
           })),
         menu: () => this.menu,
+        skipTitle: () => {
+          this.titleShown = true;
+          this.title.stop();
+        },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera),
         hands: () => this.hands,
         settings: () => this.settingsPanel,
@@ -225,6 +229,10 @@ export class GameSystem extends createSystem({
       this.sessionTime = 0;
       this.titleShown = false;
       this.occluderKey = '';
+      // Panels left open in another mode would float in the wrong place.
+      this.menu.close();
+      this.album.hide();
+      this.settingsPanel.close();
       this.scanHinted = false;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
@@ -352,10 +360,12 @@ export class GameSystem extends createSystem({
     if (!on) return;
     const planes = this.planeInfos();
     const meshes = this.meshInfos();
-    const key = `${planes.length}:${meshes.length}`;
+    const mat = this.game.boardRoot.getWorldPosition(this.watchPoint);
+    // Rebuilt when the scan or the mat changes; the head position is taken then.
+    const key = `${planes.length}:${meshes.length}:${mat.x.toFixed(2)},${mat.y.toFixed(2)},${mat.z.toFixed(2)}`;
     if (key === this.occluderKey) return;
     this.occluderKey = key;
-    this.occluders.update(planes, meshes);
+    this.occluders.update(planes, meshes, mat, this.world.camera.getWorldPosition(this.ear));
   }
 
   private toggleSound() {

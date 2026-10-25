@@ -138,4 +138,28 @@ describe('room occluders', () => {
     occluders.update([], []);
     expect(occluders.root.children).toHaveLength(0);
   });
+
+  it('cuts a box down to the tabletop over it and leaves the furniture under the mat alone', () => {
+    const desk = new Object3D();
+    desk.position.set(1, 0, -3);
+    // Box reaches 0.9 m (a lip at the back) while the detected top is at 0.8 m.
+    const box: MeshInfo = { object: desk, label: 'table', min: [0, 0, 0], max: [2, 0.9, 1] };
+    const top = planeInfo(0.8, 'horizontal');
+    const occluders = new Occluders();
+    occluders.update([top], [box]);
+    const g = (occluders.root.children[0] as Mesh).geometry;
+    g.computeBoundingBox();
+    expect(g.boundingBox!.max.y).toBeCloseTo(0.8 - 0.006 - 0.01, 5);
+    occluders.update([top], [box], new Vector3(2, 0.82, -2.5));
+    expect(occluders.root.children).toHaveLength(1);
+  });
+
+  it('skips a surface the player is sitting over', () => {
+    const seat = planeInfo(1.1, 'horizontal');
+    const occluders = new Occluders();
+    occluders.update([seat], [], null, new Vector3(2.2, 1.2, -3.1));
+    expect(occluders.root.children).toHaveLength(0);
+    occluders.update([seat], [], null, new Vector3(5, 1.2, -3));
+    expect(occluders.root.children).toHaveLength(1);
+  });
 });
