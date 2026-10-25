@@ -94,6 +94,8 @@ export class FoldGame {
   private textures: PaperTextures;
   private paperView: PaperView;
   private buttons: Button[] = [];
+  private easyFolds = false;
+  private reduceMotion = false;
 
   levelIndex = 0;
   level: Level = LEVELS[0];
@@ -195,6 +197,27 @@ export class FoldGame {
     return this.buttons.find((b) => b.kind === kind);
   }
 
+  setEasyFolds(on: boolean) {
+    this.easyFolds = on;
+  }
+
+  setLeftHanded(on: boolean) {
+    for (const b of this.buttons) {
+      const near = b.kind === 'undo' || b.kind === 'hint';
+      b.root.position.x = (near !== on ? 1 : -1) * 0.295;
+    }
+  }
+
+  setReduceMotion(on: boolean) {
+    this.reduceMotion = on;
+    if (on && this.drop >= 0) this.updateDrop(0);
+  }
+
+  setHighContrast(on: boolean) {
+    this.textures.setHighContrast(on);
+    this.board.setHighContrast(on);
+  }
+
   private addButton(kind: IconKind, x: number, y: number, action: () => void, label = '') {
     const b = new Button(kind, () => {
       if (this.inputLocked || this.drag || this.settle) return;
@@ -236,6 +259,7 @@ export class FoldGame {
     this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '', level.creature);
     this.restart();
     this.drop = 0;
+    if (this.reduceMotion) this.updateDrop(0);
     sfx.pick();
   }
 
@@ -771,7 +795,7 @@ export class FoldGame {
   private updateDrag(dt: number, immediate = false) {
     const d = this.drag!;
     const raw = rawCrease(d.p, d.hand);
-    const snap = raw ? snapCrease(raw, d.p, this.paper, d.snap) : null;
+    const snap = raw ? snapCrease(raw, d.p, this.paper, d.snap, this.easyFolds ? 0.09 : 0.05) : null;
     if (this.xray.enabled) this.showSolver(d, raw);
     const changed =
       (snap === null) !== (d.snap === null) ||
@@ -882,7 +906,7 @@ export class FoldGame {
   /** The new sheet drifts down like a leaf and settles flat. */
   private updateDrop(dt: number) {
     if (this.drop < 0 || this.vanish >= 0) return;
-    this.drop = Math.min(1, this.drop + dt / 0.9);
+    this.drop = this.reduceMotion ? 1 : Math.min(1, this.drop + dt / 0.9);
     const e = this.drop;
     const r = this.paperView.root;
     const k = 1 - e;

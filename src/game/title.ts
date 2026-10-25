@@ -72,6 +72,11 @@ export class TitleCard {
     return this.t >= 0;
   }
 
+  stop() {
+    this.t = -1;
+    this.root.visible = false;
+  }
+
   update(dt: number) {
     if (this.t < 0) return;
     this.t += dt;

@@ -19,6 +19,7 @@ import {
   World,
 } from '@iwsdk/core';
 import { Button, IconKind } from './button.js';
+import type { Hands } from './hands.js';
 import { sfx } from './sfx.js';
 
 export interface MenuItem {
@@ -69,6 +70,10 @@ export class PalmMenu {
   private clock = 0;
   /** Which hand shows the token; the other one touches it. */
   menuHand: XRHandedness = 'left';
+  /** Hand speeds, so a palm swinging past does not raise the token. */
+  hands: Hands | null = null;
+  /** True while the player is folding: no token, and the panel closes. */
+  blocked = false;
   private head = new Vector3();
   private fwd = new Vector3();
   private wrist = new Vector3();
@@ -96,7 +101,8 @@ export class PalmMenu {
       const b = new Button(
         item.icon,
         () => {
-          if (this.unfold < 0.9) return;
+          // Ignore a fingertip that was already passing through as it opened.
+          if (this.unfold < 0.9 || this.idle < 0.4) return;
           sfx.click();
           this.close();
           item.run();
@@ -140,8 +146,9 @@ export class PalmMenu {
     this.fwd.y = 0;
     if (this.fwd.lengthSq() < 1e-4) this.fwd.set(0, 0, -1);
     this.fwd.normalize();
-    this.panel.position.copy(this.head).addScaledVector(this.fwd, 0.42);
-    this.panel.position.y -= 0.16;
+    // At chest height and a forearm away, above the mat where hands work.
+    this.panel.position.copy(this.head).addScaledVector(this.fwd, 0.45);
+    this.panel.position.y -= 0.1;
     this.panel.lookAt(this.head);
     this.panel.visible = true;
     this.wantOpen = true;
@@ -188,7 +195,10 @@ export class PalmMenu {
       this.center.copy(this.wrist).add(this.idx).add(this.pinky).multiplyScalar(1 / 3);
       this.a.subVectors(this.head, this.center).normalize();
       const open = this.tip.distanceTo(this.wrist) > 0.12;
-      facing = open && this.normal.dot(this.a) > 0.55;
+      const state = this.menuHand === 'left' ? this.hands?.left : this.hands?.right;
+      const still = !state || state.vel.length() < 0.35;
+      // Raised, still and turned to the face: a resting or working hand never counts.
+      facing = open && still && this.center.y > this.head.y - 0.45 && this.normal.dot(this.a) > 0.6;
       this.token.root.position.copy(this.center).addScaledVector(this.normal, 0.065);
       this.token.root.quaternion.setFromUnitVectors(UP, this.a);
     }
@@ -227,7 +237,8 @@ export class PalmMenu {
     }
     for (const b of this.buttons) b.update(dt);
 
-    this.palm = inXR && this.palmFacing ? this.palm + dt : Math.max(0, this.palm - dt * 3);
+    if (this.blocked && this.wantOpen) this.close();
+    this.palm = inXR && this.palmFacing && !this.blocked ? this.palm + dt : Math.max(0, this.palm - dt * 3);
     const on = this.palm > PALM_HOLD && !this.wantOpen ? 1 : 0;
     this.tokenOn += (on - this.tokenOn) * Math.min(1, dt * 10);
     this.token.root.visible = this.tokenOn > 0.05;

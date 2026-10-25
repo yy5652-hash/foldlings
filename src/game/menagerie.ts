@@ -34,7 +34,7 @@ import { sfx } from './sfx.js';
 
 const SAVE_KEY = 'foldlings.zoo.v1';
 const UP = new Vector3(0, 1, 0);
-const MAX_SHOWN = 18;
+const MAX_SHOWN = 14;
 
 export interface SavedCreature {
   kind: CreatureKind;
@@ -197,6 +197,7 @@ export class Menagerie {
   private shock = new Shockwave();
   private marker = new HomeMarker();
   private markerTime = 0;
+  private reduceMotion = false;
   private placedThisSession = false;
   /** True in passthrough: spots refer to the player's real room. */
   realRoom = false;
@@ -233,6 +234,24 @@ export class Menagerie {
 
   get count(): number {
     return this.saved.length;
+  }
+
+  setReduceMotion(on: boolean) {
+    if (this.reduceMotion === on) return;
+    this.reduceMotion = on;
+    if (on) {
+      this.confetti.stop();
+      this.shock.stop();
+    }
+    for (const l of this.live) {
+      const tr = l.travel;
+      if (tr?.mode !== 'fly') continue;
+      tr.arc *= on ? 1 / 3 : 3;
+      if (tr.woke && tr.prelude > 0 && this.marker.root.visible) {
+        this.marker.show(tr, tr.normal);
+        this.markerTime = tr.dur - tr.t;
+      }
+    }
   }
 
   setSurfaces(s: Surface[]) {
@@ -524,7 +543,7 @@ export class Menagerie {
       dur: Math.min(4.5, 1.4 + dist * (flying ? 0.9 : 1.3)),
       mode: flying ? 'fly' : 'hop',
       hops: Math.max(2, Math.round(dist / 0.28)),
-      arc: flying ? 0.25 + dist * 0.15 : 0.07,
+      arc: flying ? (0.25 + dist * 0.15) / (this.reduceMotion ? 3 : 1) : 0.07,
       endQuat: rest.quat,
       start: startLocal,
       prelude,
@@ -561,7 +580,7 @@ export class Menagerie {
       if (l.travel) this.stepTravel(l, dt, head);
       else if (l.orbit) {
         const o = l.orbit;
-        o.phase += dt * o.speed;
+        o.phase += dt * o.speed * (this.reduceMotion ? 0.5 : 1);
         const p = l.c.root.position;
         p.set(
           o.center.x + Math.cos(o.phase) * o.radius,
@@ -592,8 +611,10 @@ export class Menagerie {
       if (!tr.woke && !l.c.folding && since > LIFT) {
         tr.woke = true;
         const at = root.getWorldPosition(this.tmp);
-        this.confetti.burst(at, LOOKS[l.saved.look % LOOKS.length].front);
-        this.shock.burst(at);
+        if (!this.reduceMotion) {
+          this.confetti.burst(at, LOOKS[l.saved.look % LOOKS.length].front);
+          this.shock.burst(at);
+        }
         sfx.awaken();
         l.c.poke();
         this.marker.show(tr, tr.normal);
@@ -717,7 +738,7 @@ export class Menagerie {
       dur: Math.min(3, 0.5 + dist * (flying ? 0.9 : 1.2)),
       mode: flying ? 'fly' : 'hop',
       hops: Math.max(1, Math.round(dist / 0.28)),
-      arc: flying ? 0.15 + dist * 0.1 : 0.07,
+      arc: flying ? (0.15 + dist * 0.1) / (this.reduceMotion ? 3 : 1) : 0.07,
       endQuat,
       start: from,
       prelude: 0,
@@ -798,6 +819,11 @@ class Confetti {
     }
   }
 
+  stop() {
+    this.life = 0;
+    this.mesh.visible = false;
+  }
+
   burst(at: Vector3, color: string) {
     const a = new Color(color);
     const b = new Color(0xf6f0e4);
@@ -857,6 +883,11 @@ class Shockwave {
     this.mesh.visible = false;
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 60;
+  }
+
+  stop() {
+    this.life = 0;
+    this.mesh.visible = false;
   }
 
   burst(at: Vector3) {

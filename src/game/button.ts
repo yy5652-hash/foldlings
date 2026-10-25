@@ -190,17 +190,11 @@ function drawIcon(kind: IconKind): CanvasTexture {
   return t;
 }
 
-/** A one-word caption lying flat on the player's side of the token. */
-function labelMesh(text: string): Mesh {
+/** A caption lying flat on the player's side of the token. */
+function labelMesh(): Mesh<PlaneGeometry, MeshBasicMaterial> {
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 64;
-  const g = c.getContext('2d')!;
-  g.font = '600 40px system-ui, -apple-system, Segoe UI, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillStyle = 'rgba(246,240,228,0.92)';
-  g.fillText(text, 128, 34);
   const t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
   const m = new Mesh(new PlaneGeometry(0.064, 0.016), new MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
@@ -218,6 +212,7 @@ export class Button {
   private clock = 0;
   private face: MeshBasicMaterial;
   private icons = new Map<IconKind, CanvasTexture>();
+  private label: Mesh<PlaneGeometry, MeshBasicMaterial> | null = null;
 
   constructor(
     readonly kind: IconKind,
@@ -245,7 +240,7 @@ export class Button {
     this.cap.add(body, face);
     this.cap.position.y = 0.004;
     this.root.add(this.cap);
-    if (label) this.root.add(labelMesh(label));
+    if (label) this.setLabel(label);
 
     const target = this.root as unknown as {
       addEventListener(type: string, fn: () => void): void;
@@ -277,6 +272,46 @@ export class Button {
   setVisible(v: boolean) {
     this.root.visible = v;
   }
+
+  private labelText = '';
+
+  setLabel(text: string) {
+    this.labelText = text;
+    if (!this.label) {
+      this.label = labelMesh();
+      this.root.add(this.label);
+    }
+    const material = this.label.material;
+    const c = material.map!.image as HTMLCanvasElement;
+    const g = c.getContext('2d')!;
+    const font = '600 40px system-ui, -apple-system, Segoe UI, sans-serif';
+    g.font = font;
+    const width = Math.max(256, Math.ceil(g.measureText(text).width) + 16);
+    if (c.width !== width) {
+      c.width = width;
+      material.map!.dispose();
+      material.map = new CanvasTexture(c);
+      material.map.colorSpace = SRGBColorSpace;
+    }
+    g.clearRect(0, 0, c.width, c.height);
+    g.font = font;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = 'rgba(246,240,228,0.92)';
+    g.fillText(text, c.width / 2, 34);
+    this.label.scale.set((c.width / 256) * this.beside, this.beside, 1);
+    if (this.besideOn) this.label.position.set(RADIUS + 0.012 + 0.032 * this.label.scale.x, 0.0012, 0);
+    material.map!.needsUpdate = true;
+  }
+
+  /** Puts the label to the right of the token, `scale` times larger (panel rows). */
+  setLabelBeside(scale: number) {
+    this.besideOn = true;
+    this.beside = scale;
+    if (this.label) this.setLabel(this.labelText);
+  }
+  private besideOn = false;
+  private beside = 1;
 
   /** Draws the eye with a few gentle bounces. */
   pulse(seconds = 2.4) {

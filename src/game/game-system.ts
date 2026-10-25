@@ -26,6 +26,7 @@ import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
 import { TitleCard } from './title.js';
+import { loadSettings, saveSettings, SettingsPanel, SettingsState } from './settings.js';
 import { floatingPlacement, Placement, tablePlacement } from './placement.js';
 import {
   MeshInfo,
@@ -81,6 +82,8 @@ export class GameSystem extends createSystem({
   private ear = new Vector3();
   private menu!: PalmMenu;
   private album!: Album;
+  private settingsPanel!: SettingsPanel;
+  private settings = loadSettings();
   private hands!: Hands;
   private watchPoint = new Vector3();
   /** Real furniture and walls hide creatures behind them (passthrough only). */
@@ -138,14 +141,23 @@ export class GameSystem extends createSystem({
       onMenu: () => this.menu.toggle(),
     });
     this.album = new Album(this.world);
+    this.settingsPanel = new SettingsPanel(this.world, this.settings, (state) => {
+      this.applySettings(state);
+      saveSettings(state);
+    });
     this.menu = new PalmMenu(this.world, [
       { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera) },
       { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
       { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
       { icon: 'sound', label: 'Sound', run: () => this.toggleSound() },
       { icon: 'recenter', label: 'Move mat', run: () => this.place(true) },
-      { icon: 'close', label: 'Close', run: () => {} },
+      { icon: 'settings', label: 'Settings', run: () => {
+        this.album.hide();
+        this.settingsPanel.open();
+      } },
     ]);
+    this.menu.hands = this.hands;
+    this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
     if (this.progress.muted) {
       setMuted(true);
@@ -189,6 +201,7 @@ export class GameSystem extends createSystem({
         menu: () => this.menu,
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera),
         hands: () => this.hands,
+        settings: () => this.settingsPanel,
         occluders: () => this.occluders.root.children.length,
         gallery: () => {
           const kinds = ['crane', 'frog', 'fox', 'fish', 'butterfly', 'boat', 'rabbit', 'whale'] as const;
@@ -351,6 +364,17 @@ export class GameSystem extends createSystem({
     this.saveProgress();
   }
 
+  private applySettings(state: SettingsState) {
+    this.settings = state;
+    this.game.setEasyFolds(state.easyFolds);
+    this.menu.menuHand = state.leftHanded ? 'right' : 'left';
+    this.game.setLeftHanded(state.leftHanded);
+    this.game.setReduceMotion(state.reduceMotion);
+    this.zoo.setReduceMotion(state.reduceMotion);
+    if (state.reduceMotion) this.title.stop();
+    this.game.setHighContrast(state.highContrast);
+  }
+
   private boardWorld(): Vector3 {
     return this.game.boardRoot.getWorldPosition(new Vector3());
   }
@@ -468,7 +492,7 @@ export class GameSystem extends createSystem({
     }
     if (this.celebrate) this.updateCelebration(delta);
     // The title unfolds once the mat has settled after the room scan.
-    if (!this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active) {
+    if (!this.settings.reduceMotion && !this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active) {
       this.titleShown = true;
       this.game.boardRoot.updateWorldMatrix(true, false);
       this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
@@ -483,9 +507,12 @@ export class GameSystem extends createSystem({
       this.refreshOccluders();
     }
     this.zoo.watch = this.game.busy ? this.game.boardRoot.getWorldPosition(this.watchPoint) : null;
+    this.menu.blocked = this.game.busy;
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.album.update(delta);
+    this.settingsPanel.update(delta);
     this.world.camera.getWorldPosition(this.ear);
+    Creature.viewer.copy(this.ear);
     this.world.camera.getWorldDirection(this.earFwd);
     setListener(this.ear, this.earFwd);
     this.game.update(delta, time);

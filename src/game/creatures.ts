@@ -33,8 +33,14 @@ const easeBack = (x: number) => {
   return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2);
 };
 
+/** Crease lines show only within this distance of the viewer. */
+const DETAIL_RANGE = 1.1;
+
 export class Creature {
+  /** The viewer's head, updated each frame by the game. */
+  static readonly viewer = new Vector3(0, 1.4, 0);
   readonly root = new Group();
+  private detailed = true;
   readonly kind: CreatureKind;
   private rig: Rig;
   private t = Math.random() * 10;
@@ -138,6 +144,12 @@ export class Creature {
 
   update(dt: number) {
     this.t += dt;
+    // Far away, the thin crease lines cost draw calls without showing.
+    const near = this.foldT >= 0 || this.root.getWorldPosition(this.v).distanceTo(Creature.viewer) < DETAIL_RANGE;
+    if (near !== this.detailed) {
+      this.detailed = near;
+      for (const e of this.rig.edges) e.visible = near;
+    }
     this.flash = Math.max(0, this.flash - dt * 2.4);
     const lines = this.rig.lines;
     lines.opacity = 0.3 + this.flash * 0.7;

@@ -123,6 +123,8 @@ export class PaperTextures {
   readonly back: CanvasTexture;
   private frontCanvas: HTMLCanvasElement;
   private backCanvas: HTMLCanvasElement;
+  private highContrast = false;
+  private creases: readonly [V2, V2][] = [];
 
   constructor(
     private look: PaperLook,
@@ -146,8 +148,15 @@ export class PaperTextures {
     this.seed = seed;
   }
 
+  setHighContrast(on: boolean) {
+    if (this.highContrast === on) return;
+    this.highContrast = on;
+    this.redraw(this.creases);
+  }
+
   /** Repaints both sides with the given crease segments (sheet space). */
   redraw(creases: readonly [V2, V2][]) {
+    this.creases = creases;
     const f = this.frontCanvas.getContext('2d')!;
     f.fillStyle = this.look.front;
     f.fillRect(0, 0, SIZE, SIZE);
@@ -162,6 +171,16 @@ export class PaperTextures {
     b.fillStyle = this.look.back;
     b.fillRect(0, 0, SIZE, SIZE);
     fibres(b, this.seed * 7 + 3, true);
+    if (this.highContrast) {
+      b.strokeStyle = '#3b3027';
+      b.lineWidth = 5;
+      for (let x = 0; x < SIZE * 2; x += 24) {
+        b.beginPath();
+        b.moveTo(x, 0);
+        b.lineTo(x - SIZE, SIZE);
+        b.stroke();
+      }
+    }
     b.strokeStyle = 'rgba(0,0,0,0.05)';
     b.lineWidth = 4;
     b.strokeRect(2, 2, SIZE - 4, SIZE - 4);

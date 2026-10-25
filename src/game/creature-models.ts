@@ -55,12 +55,39 @@ export interface Rig {
   folds: Fold[];
   /** Crease lines; brightened while the creature folds itself up. */
   lines: LineBasicMaterial;
+  /** Every crease-line object, hidden on far-away creatures to save draw calls. */
+  edges: LineSegments[];
 }
 
 const paper = new MeshLambertMaterial({ vertexColors: true, side: FrontSide });
-const eyeGeo = new IcosahedronGeometry(1, 2);
-const inkMat = new MeshBasicMaterial({ color: 0x1b1714 });
-const glintMat = new MeshBasicMaterial({ color: 0xffffff });
+const eyeMat = new MeshBasicMaterial({ vertexColors: true });
+
+/** One unit eye: a flattened ink dot with its white glint, in one draw call. */
+function eyeGeometry(): BufferGeometry {
+  const ball = new IcosahedronGeometry(1, 2).toNonIndexed();
+  ball.scale(1, 1, 0.45);
+  const glint = new IcosahedronGeometry(1, 1).toNonIndexed();
+  glint.scale(0.3, 0.3, 0.3);
+  glint.translate(0.32, 0.36, 0.36);
+  const pos: number[] = [];
+  const col: number[] = [];
+  for (const [g, c] of [
+    [ball, [0.105, 0.09, 0.078]],
+    [glint, [1, 1, 1]],
+  ] as const) {
+    const a = g.getAttribute('position');
+    for (let i = 0; i < a.count; i++) {
+      pos.push(a.getX(i), a.getY(i), a.getZ(i));
+      col.push(c[0], c[1], c[2]);
+    }
+    g.dispose();
+  }
+  const out = new BufferGeometry();
+  out.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  out.setAttribute('color', new Float32BufferAttribute(col, 3));
+  return out;
+}
+const eyeGeo = eyeGeometry();
 const INK = new Color(0x2a2420);
 
 const sub = (a: P, b: P): Vector3 => new Vector3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -85,7 +112,10 @@ class Model {
   private col: number[] = [];
   private n = 0;
 
-  constructor(private lines: LineBasicMaterial) {}
+  constructor(
+    private lines: LineBasicMaterial,
+    private edgeList: LineSegments[],
+  ) {}
 
   private push(t: Tri, color: Color, shade: number) {
     // A faint per-face variation makes flat paper read as separate facets.
@@ -120,6 +150,7 @@ class Model {
     mesh.name = 'Paper';
     const edges = new LineSegments(new EdgesGeometry(g, 14), this.lines);
     edges.name = 'Creases';
+    this.edgeList.push(edges);
     out.add(mesh, edges);
     return out;
   }
@@ -133,6 +164,7 @@ class Kit {
   readonly lines = new LineBasicMaterial({ color: INK, transparent: true, opacity: 0.35 });
   readonly eyes: Object3D[] = [];
   readonly folds: Fold[] = [];
+  readonly edges: LineSegments[] = [];
 
   constructor(
     readonly o: Color,
@@ -140,7 +172,7 @@ class Kit {
   ) {}
 
   model(): Model {
-    return new Model(this.lines);
+    return new Model(this.lines, this.edges);
   }
 
   /** An ink-dot eye sitting on face `f` of a solid centred at `c`. */
@@ -152,14 +184,10 @@ class Kit {
     g.name = 'Eye';
     g.position.set(p[0], p[1], p[2]).addScaledVector(n, r * 0.15);
     g.lookAt(g.position.clone().add(n));
-    const ball = new Mesh(eyeGeo, inkMat);
+    const ball = new Mesh(eyeGeo, eyeMat);
     ball.name = 'Ink';
-    ball.scale.set(r, r, r * 0.45);
-    const glint = new Mesh(eyeGeo, glintMat);
-    glint.name = 'Glint';
-    glint.scale.setScalar(r * 0.3);
-    glint.position.set(r * 0.32, r * 0.36, r * 0.36);
-    g.add(ball, glint);
+    ball.scale.setScalar(r);
+    g.add(ball);
     this.eyes.push(g);
     return g;
   }
@@ -612,6 +640,7 @@ export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
     earR: parts.earR,
     folds: k.folds,
     lines: k.lines,
+    edges: k.edges,
   };
 }
 

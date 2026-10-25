@@ -120,6 +120,9 @@ export class BoardView {
   private dotGeo = new CircleGeometry(0.0042, 20);
   private ringGeo = new RingGeometry(0.003, 0.0044, 24);
   private warm = false;
+  private highContrast = false;
+  private goalFacets: readonly Facet[] = [];
+  private creaseColor = 0xfff6d8;
   /** Hint step 1: a pulsing ring on the corner to pinch. */
   private hintRing: Mesh;
   /** Hint step 2: the crease to fold along. */
@@ -332,7 +335,7 @@ export class BoardView {
   private buildOutline(facets: readonly Facet[]) {
     const segs = unionOutline(facets.map((f) => f.poly));
     const pos: number[] = [];
-    const w = 0.0012;
+    const w = this.highContrast ? 0.0024 : 0.0012;
     const y = 0.008;
     const dash = 0.008;
     const gap = 0.005;
@@ -362,10 +365,20 @@ export class BoardView {
     this.outline.geometry = g;
   }
 
+  setHighContrast(on: boolean) {
+    if (this.highContrast === on) return;
+    this.highContrast = on;
+    this.buildOutline(this.goalFacets);
+    this.outlineMat.opacity = on || this.warm ? 1 : 0.8;
+    this.creaseMat.color.set(on ? 0xffffff : this.creaseColor);
+    this.creaseMat.opacity = on ? 1 : 0.9;
+    (this.hintLine.material as MeshBasicMaterial).color.set(on ? 0xffffff : 0xffd166);
+  }
+
   /** Gentle breathing of the goal outline. */
   update(dt: number) {
     this.clock += dt;
-    this.outlineMat.opacity = this.warm ? 1 : 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
+    this.outlineMat.opacity = this.highContrast || this.warm ? 1 : 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
     this.hintT += dt;
     if (this.hintRing.visible) {
       const k = (this.hintT * 1.4) % 1;
@@ -373,7 +386,7 @@ export class BoardView {
       (this.hintRing.material as MeshBasicMaterial).opacity = 1 - k;
     }
     if (this.hintLine.visible) {
-      (this.hintLine.material as MeshBasicMaterial).opacity = 0.55 + 0.4 * Math.sin(this.clock * 5);
+      (this.hintLine.material as MeshBasicMaterial).opacity = this.highContrast ? 1 : 0.55 + 0.4 * Math.sin(this.clock * 5);
     }
     if (this.mini) {
       this.miniSpin += dt * 0.6;
@@ -395,6 +408,7 @@ export class BoardView {
     kind?: CreatureKind,
   ) {
     if (kind) this.setMini(kind, look);
+    this.goalFacets = facets;
     this.buildOutline(facets);
     this.outline.visible = true;
     const g = this.ghostCanvas.getContext('2d')!;
@@ -460,7 +474,8 @@ export class BoardView {
     // Plane's long axis is local x; rotate around world up to the line direction.
     const angle = Math.atan2(line.nx, -line.ny);
     this.crease.rotation.set(-Math.PI / 2, 0, angle);
-    this.creaseMat.color.set(solves ? 0xffc53d : highlight ? 0xffd166 : 0xfff6d8);
+    this.creaseColor = solves ? 0xffc53d : highlight ? 0xffd166 : 0xfff6d8;
+    this.creaseMat.color.set(this.highContrast ? 0xffffff : this.creaseColor);
   }
 
   boardToLocal(x: number, y: number, h: number, out: Vector3): Vector3 {
