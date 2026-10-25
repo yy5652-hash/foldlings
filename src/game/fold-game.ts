@@ -44,6 +44,7 @@ import {
 import { BoardView } from './board-view.js';
 import { Button, IconKind } from './button.js';
 import { Guide } from './guide.js';
+import { HandGrace, HandsMissing } from './hand-grace.js';
 import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
 import { PaperTextures } from './paper-texture.js';
@@ -81,6 +82,7 @@ export interface FoldGameEvents {
   onRecenter?: () => void;
   onDaily?: () => void;
   onSound?: () => void;
+  onMenu?: () => void;
   /** Small collection line for the goal card ("Zoo 7 · 3-day streak"). */
   footer?: () => string;
 }
@@ -110,11 +112,19 @@ export class FoldGame {
   readonly xray = new Xray();
   private idle = 0;
   private hintTimer = 0;
+  /** How far up the hint ladder the player has gone for this fold. */
+  private hintStep = 0;
+  /** A new sheet drifting down onto the mat (0..1), or -1. */
+  private drop = -1;
   private message = '';
   private messageTimer = 0;
   private folds = 0;
 
   private drag: Drag | null = null;
+  private handGrace = new HandGrace();
+  private handsMissing = new HandsMissing();
+  private handsTracked = false;
+  private pinchingHands = new Set<XRInputSource>();
   private settle: Settle | null = null;
   private glow = 0;
   private time = 0;
@@ -150,12 +160,11 @@ export class FoldGame {
     target.addEventListener('pointercancel', (e) => this.onRayUp(e));
 
     // Most-used tokens sit nearest the player.
-    this.addButton('undo', 0.295, -0.12, () => this.undo());
-    this.addButton('hint', 0.295, -0.03, () => this.hint());
-    this.addButton('restart', 0.295, 0.06, () => this.restart());
-    this.addButton('daily', -0.295, -0.12, () => this.events.onDaily?.());
-    this.addButton('sound', -0.295, -0.03, () => this.events.onSound?.());
-    this.addButton('recenter', -0.295, 0.06, () => this.events.onRecenter?.());
+    // Everything else lives in the menu (palm-up or the menu token).
+    this.addButton('undo', 0.295, -0.12, () => this.undo(), 'Undo');
+    this.addButton('hint', 0.295, -0.01, () => this.hint(), 'Hint');
+    this.addButton('menu', -0.295, -0.12, () => this.events.onMenu?.(), 'Menu');
+    this.addButton('daily', -0.295, -0.01, () => this.events.onDaily?.(), 'Daily');
 
     const ring = new RingGeometry(0.008, 0.011, 32);
     ring.rotateX(-Math.PI / 2);
@@ -173,6 +182,11 @@ export class FoldGame {
     world.renderer.xr.addEventListener('sessionstart', () => this.onSessionStart());
     world.renderer.xr.addEventListener('sessionend', () => {
       for (const c of this.cursors) c.visible = false;
+      if (this.drag?.source?.hand) this.endDrag(true);
+      this.handGrace.reset();
+      this.handsMissing.reset();
+      this.handsTracked = false;
+      this.pinchingHands.clear();
     });
     world.onXRFrame((frame) => this.onXRFrame(frame));
   }
@@ -181,13 +195,13 @@ export class FoldGame {
     return this.buttons.find((b) => b.kind === kind);
   }
 
-  private addButton(kind: IconKind, x: number, y: number, action: () => void) {
+  private addButton(kind: IconKind, x: number, y: number, action: () => void, label = '') {
     const b = new Button(kind, () => {
       if (this.inputLocked || this.drag || this.settle) return;
       unlockAudio();
       sfx.click();
       action();
-    });
+    }, label);
     b.root.position.set(x, 0, -y);
     const e = this.world.createTransformEntity(b.root, this.boardEntity);
     e.addComponent(RayInteractable);
@@ -221,6 +235,8 @@ export class FoldGame {
     this.textures.setLook(level.look, seed);
     this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '', level.creature);
     this.restart();
+    this.drop = 0;
+    sfx.pick();
   }
 
   /** Teaching levels show the ghost fold on their own. */
@@ -294,6 +310,7 @@ export class FoldGame {
     this.creaseHistory = [];
     this.solved = false;
     this.drag = null;
+    this.handGrace.reset();
     this.settle = null;
     this.folds = 0;
     this.idle = 0;
@@ -303,6 +320,13 @@ export class FoldGame {
     this.board.showCrease(null);
     this.board.setGhostOpacity(0.55);
     this.board.setFoldCount(0, this.level.solution.length);
+    this.clearHints();
+  }
+
+  private clearHints() {
+    this.hintStep = 0;
+    this.board.showHintCorner(null);
+    this.board.showHintLine(null);
   }
 
   undo() {
@@ -316,13 +340,31 @@ export class FoldGame {
     this.paperView.setPaper(this.paper);
     this.solved = false;
     this.board.setFoldCount(this.folds, this.level.solution.length);
+    this.clearHints();
   }
 
+  /** Each press gives a little more: the corner, then the crease, then a demonstration. */
   hint() {
     const next = this.nextFold();
-    if (next && this.guide.show(this.paper, next)) {
-      this.hintTimer = 5.2;
-      return;
+    const pts = next ? this.nextFoldPoints() : null;
+    if (next && pts) {
+      this.hintStep = Math.min(3, this.hintStep + 1);
+      this.board.showHintCorner(pts.grab);
+      if (this.hintStep === 1) {
+        this.guide.setCaption('Pinch here');
+        this.hintTimer = 4;
+        return;
+      }
+      this.board.showHintLine(creaseLine(next));
+      if (this.hintStep === 2) {
+        this.guide.setCaption('Fold along the gold line');
+        this.hintTimer = 4;
+        return;
+      }
+      if (this.guide.show(this.paper, next)) {
+        this.hintTimer = 5.2;
+        return;
+      }
     }
     // Off the known path: point at undo instead.
     this.guide.setCaption(this.history.length ? 'Undo, then try another fold' : '');
@@ -336,8 +378,17 @@ export class FoldGame {
     unlockAudio();
     const session = this.world.renderer.xr.getSession();
     if (!session) return;
+    this.handsMissing.reset();
+    this.handsTracked = false;
+    this.pinchingHands.clear();
     session.addEventListener('selectstart', (e) => this.onSelectStart(e));
     session.addEventListener('selectend', (e) => this.onSelectEnd(e));
+    session.addEventListener('inputsourceschange', (e) => {
+      for (const source of e.removed) {
+        this.pinchingHands.delete(source);
+        if (source.hand && this.drag?.source === source) this.handGrace.trackingLost();
+      }
+    });
   }
 
   private toBoard(world: Vector3, out: Point3): Point3 {
@@ -398,11 +449,21 @@ export class FoldGame {
   }
 
   private canStart(): boolean {
-    return !this.inputLocked && !this.solved && !this.settle;
+    return !this.inputLocked && !this.solved && !this.settle && this.drop < 0;
   }
 
   private onSelectStart(e: XRInputSourceEvent) {
+    if (e.inputSource.hand) {
+      this.pinchingHands.add(e.inputSource);
+      if (this.drag?.source === e.inputSource &&
+          (this.handGrace.pendingRelease || this.handGrace.frozen)) {
+        this.handGrace.pinchStarted();
+        if (this.drag.kind === 'ray') this.board.hitPlane.setPointerCapture?.(this.drag.pointerId);
+        return;
+      }
+    }
     if (!this.canStart()) return;
+    if (this.drag?.source?.hand && this.drag.source !== e.inputSource) return;
     // A ray drag that began on this same pinch becomes a near drag instead.
     if (this.drag && !(this.drag.kind === 'ray' && this.time - this.drag.startedAt < 0.15)) {
       return;
@@ -421,12 +482,24 @@ export class FoldGame {
   }
 
   private onSelectEnd(e: XRInputSourceEvent) {
+    if (e.inputSource.hand) {
+      this.pinchingHands.delete(e.inputSource);
+      if (this.drag?.source === e.inputSource) {
+        this.handGrace.pinchEnded();
+        return;
+      }
+    }
     if (this.drag?.kind === 'near' && this.drag.source === e.inputSource) {
       this.endDrag();
     }
   }
 
   private onRayDown(e: PointerLike) {
+    const source = this.rayHand(e.pointerId);
+    if (source && this.drag?.kind === 'ray' && this.drag.source === source) {
+      this.board.hitPlane.setPointerCapture?.(e.pointerId);
+      return;
+    }
     if (!this.canStart() || this.drag) return;
     unlockAudio();
     const hand: Point3 = { x: 0, y: 0, h: 0 };
@@ -434,12 +507,22 @@ export class FoldGame {
     const p = this.grabPoint(hand);
     if (!p) return;
     this.board.hitPlane.setPointerCapture?.(e.pointerId);
-    this.beginDrag('ray', null, e.pointerId, p, { x: p.x, y: p.y, h: 0 });
+    this.beginDrag('ray', source, e.pointerId, p, { x: p.x, y: p.y, h: 0 });
+  }
+
+  private rayHand(pointerId: number): XRInputSource | null {
+    if (!this.world.renderer.xr.isPresenting) return null;
+    const input = this.world.input.xr;
+    const side = input.multiPointers.left.getPointer('ray').id === pointerId ? 'left'
+      : input.multiPointers.right.getPointer('ray').id === pointerId ? 'right' : null;
+    const source = side ? input.getPrimaryInputSource(side) : null;
+    return source?.hand ? source : null;
   }
 
   private onRayMove(e: PointerLike) {
     const d = this.drag;
     if (!d || d.kind !== 'ray' || d.pointerId !== e.pointerId) return;
+    if (d.source?.hand && (this.handGrace.frozen || this.handGrace.pendingRelease)) return;
     const src = e.ray ?? null;
     let hit: Vector3 | null = null;
     if (src) {
@@ -456,6 +539,12 @@ export class FoldGame {
 
   private onRayUp(e: PointerLike) {
     if (this.drag?.kind === 'ray' && this.drag.pointerId === e.pointerId) {
+      if (this.drag.source?.hand) {
+        this.handGrace.pinchEnded();
+        // Pointer-up clears capture; keep receiving moves throughout the grace window.
+        this.board.hitPlane.setPointerCapture?.(e.pointerId);
+        return;
+      }
       this.board.hitPlane.releasePointerCapture?.(e.pointerId);
       this.endDrag();
     }
@@ -468,6 +557,8 @@ export class FoldGame {
     p: V2,
     hand: Point3,
   ) {
+    this.handGrace.reset();
+    if (source?.hand) this.handGrace.begin();
     this.guide.hide();
     this.idle = 0;
     this.drag = {
@@ -484,18 +575,23 @@ export class FoldGame {
     sfx.pick();
   }
 
-  private endDrag() {
+  private endDrag(cancel = false) {
     // Settle on where the hand is now, not where it was last frame.
-    if (this.drag) this.updateDrag(0, true);
+    if (this.drag && !cancel) this.updateDrag(0, true);
     this.xray.hideSolver();
     const d = this.drag;
     this.drag = null;
+    this.handGrace.reset();
+    if (d?.kind === 'ray' && d.source?.hand) {
+      this.board.hitPlane.releasePointerCapture?.(d.pointerId);
+    }
     this.board.showCrease(null);
     if (!d || !d.snap) {
       this.paperView.setPaper(this.paper);
+      if (d && cancel) sfx.cancel();
       return;
     }
-    const commit = d.angle > Math.PI / 2;
+    const commit = !cancel && d.angle > Math.PI / 2;
     this.settle = {
       snap: d.snap,
       from: d.angle,
@@ -508,7 +604,34 @@ export class FoldGame {
 
   private onXRFrame(frame: XRFrame) {
     const d = this.drag;
-    if (d && d.kind === 'near' && d.source) {
+    if (d?.source?.hand) {
+      let present = false;
+      for (const source of frame.session.inputSources) {
+        if (source === d.source) present = true;
+      }
+      if (!present) {
+        this.handGrace.trackingLost();
+        // A returning hand may have a new input source; never borrow the other hand.
+        for (const source of frame.session.inputSources) {
+          if (source.hand && source.handedness !== 'none' && source.handedness === d.source.handedness) {
+            d.source = source;
+            present = true;
+            break;
+          }
+        }
+      }
+      const world = present ? this.sourcePoint(frame, d.source, this.tmp) : null;
+      if (!world) {
+        this.handGrace.trackingLost();
+      } else {
+        const pinching = d.source.gamepad?.buttons[0]?.pressed ?? this.pinchingHands.has(d.source);
+        const action = this.handGrace.trackingFound(pinching);
+        if (action === 'cancel') this.endDrag(true);
+        // While a release is pending, keep the spot where the pinch let go.
+        else if (d.kind === 'near' && !this.handGrace.pendingRelease) this.toBoard(world, d.hand);
+        else if (action === 'resume') this.board.hitPlane.setPointerCapture?.(d.pointerId);
+      }
+    } else if (d && d.kind === 'near' && d.source) {
       const world = this.sourcePoint(frame, d.source, this.tmp);
       if (world) this.toBoard(world, d.hand);
     }
@@ -528,16 +651,22 @@ export class FoldGame {
     const session = frame.session;
     let used = 0;
     const ref = this.world.renderer.xr.getReferenceSpace();
-    if (ref && !this.solved && !this.inputLocked) {
+    this.handsTracked = false;
+    if (ref) {
       for (const source of session.inputSources) {
-        if (!source.hand || used >= this.cursors.length) continue;
-        if (this.drag?.source === source) continue;
+        // Controllers count as present hands: no "show your hands" for them.
+        if (!source.hand) {
+          if (source.gamepad) this.handsTracked = true;
+          continue;
+        }
         const thumb = source.hand.get('thumb-tip');
         const index = source.hand.get('index-finger-tip');
         if (!thumb || !index || !frame.getJointPose) continue;
         const a = frame.getJointPose(thumb, ref);
         const b = frame.getJointPose(index, ref);
         if (!a || !b) continue;
+        this.handsTracked = true;
+        if (this.solved || this.inputLocked || used >= this.cursors.length || this.drag?.source === source) continue;
         const ta = a.transform.position;
         const tb = b.transform.position;
         const gap = Math.hypot(ta.x - tb.x, ta.y - tb.y, ta.z - tb.z);
@@ -566,6 +695,12 @@ export class FoldGame {
   // ---------------------------------------------------------------- update
 
   update(dt: number, time: number) {
+    const action = this.handGrace.update(dt);
+    if (action === 'end') this.endDrag();
+    else if (action === 'cancel') this.endDrag(true);
+    if (this.handsMissing.update(dt, this.world.renderer.xr.isPresenting, this.handsTracked, !this.solved)) {
+      this.say('Show your hands to keep folding', 3);
+    }
     // A long blur (system menu, headset off) must not jump the animations.
     dt = Math.min(dt, 0.1);
     this.time = time;
@@ -573,7 +708,8 @@ export class FoldGame {
     this.board.update(dt);
     this.updateGuide(dt);
     this.updateVanish(dt);
-    if (this.drag) this.updateDrag(dt);
+    this.updateDrop(dt);
+    if (this.drag && !this.handGrace.frozen) this.updateDrag(dt);
     if (this.settle) this.updateSettle(dt);
     this.glow = Math.max(0, this.glow - dt * 1.2);
     // A soft pulse while the fold under the hand would solve the puzzle.
@@ -705,6 +841,7 @@ export class FoldGame {
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.board.setFoldCount(this.folds, this.level.solution.length);
+    this.clearHints();
     sfx.fold();
     if (rasterMatch(rasterize(this.paper), this.target) >= 0.999) {
       this.solved = true;
@@ -741,6 +878,23 @@ export class FoldGame {
   }
   private vanish = -1;
   private vanishCenter = new Vector3();
+
+  /** The new sheet drifts down like a leaf and settles flat. */
+  private updateDrop(dt: number) {
+    if (this.drop < 0 || this.vanish >= 0) return;
+    this.drop = Math.min(1, this.drop + dt / 0.9);
+    const e = this.drop;
+    const r = this.paperView.root;
+    const k = 1 - e;
+    r.position.set(Math.sin(e * 7) * 0.025 * k, 0.26 * k * k, Math.cos(e * 5) * 0.012 * k);
+    r.rotation.set(Math.cos(e * 8) * 0.22 * k, 0, Math.sin(e * 9) * 0.28 * k);
+    if (e >= 1) {
+      this.drop = -1;
+      r.position.set(0, 0, 0);
+      r.rotation.set(0, 0, 0);
+      sfx.snap();
+    }
+  }
 
   private updateVanish(dt: number) {
     if (this.vanish < 0) return;

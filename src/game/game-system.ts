@@ -21,6 +21,8 @@ import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Menagerie } from './menagerie.js';
+import { PalmMenu } from './palm-menu.js';
+import { TitleCard } from './title.js';
 import { floatingPlacement, Placement, tablePlacement } from './placement.js';
 import {
   MeshInfo,
@@ -74,6 +76,9 @@ export class GameSystem extends createSystem({
     nextAt: number;
   } | null = null;
   private ear = new Vector3();
+  private menu!: PalmMenu;
+  private title = new TitleCard();
+  private titleShown = false;
   private earFwd = new Vector3();
   private galleryItems: Creature[] = [];
   private vroom!: VirtualRoom;
@@ -115,13 +120,17 @@ export class GameSystem extends createSystem({
         if (!n) return '';
         return `Zoo ${n}` + (k > 0 ? ` · ${k}-day streak` : '');
       },
-      onSound: () => {
-        setMuted(!isMuted());
-        this.progress.muted = isMuted();
-        this.game.button('sound')?.setIcon(isMuted() ? 'mute' : 'sound');
-        this.saveProgress();
-      },
+      onSound: () => this.toggleSound(),
+      onMenu: () => this.menu.toggle(),
     });
+    this.menu = new PalmMenu(this.world, [
+      { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
+      { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
+      { icon: 'sound', label: 'Sound', run: () => this.toggleSound() },
+      { icon: 'recenter', label: 'Move mat', run: () => this.place(true) },
+      { icon: 'close', label: 'Close', run: () => {} },
+    ]);
+    this.world.createTransformEntity(this.title.root);
     if (this.progress.muted) {
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
@@ -161,6 +170,7 @@ export class GameSystem extends createSystem({
               return [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), Math.max(...zs) - Math.min(...zs)].map((v) => +v.toFixed(2));
             })(),
           })),
+        menu: () => this.menu,
         gallery: () => {
           const kinds = ['crane', 'frog', 'fox', 'fish', 'butterfly', 'boat', 'rabbit', 'whale'] as const;
           kinds.forEach((k, i) => {
@@ -181,6 +191,7 @@ export class GameSystem extends createSystem({
     this.world.renderer.xr.addEventListener('sessionstart', () => {
       startMusic();
       this.sessionTime = 0;
+      this.titleShown = false;
       this.scanHinted = false;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
@@ -301,6 +312,12 @@ export class GameSystem extends createSystem({
     this.game.button('daily')?.setIcon('back');
   }
 
+  private toggleSound() {
+    setMuted(!isMuted());
+    this.progress.muted = isMuted();
+    this.saveProgress();
+  }
+
   private boardWorld(): Vector3 {
     return this.game.boardRoot.getWorldPosition(new Vector3());
   }
@@ -417,6 +434,16 @@ export class GameSystem extends createSystem({
       root.quaternion.setFromAxisAngle(this.up, this.yawFrom + (this.yawTo - this.yawFrom) * e);
     }
     if (this.celebrate) this.updateCelebration(delta);
+    // The title unfolds once the mat has settled after the room scan.
+    if (!this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active) {
+      this.titleShown = true;
+      this.game.boardRoot.updateWorldMatrix(true, false);
+      this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
+      this.title.root.lookAt(this.world.camera.getWorldPosition(this.ear));
+      this.title.play();
+    }
+    this.title.update(delta);
+    this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.world.camera.getWorldPosition(this.ear);
     this.world.camera.getWorldDirection(this.earFwd);
     setListener(this.ear, this.earFwd);

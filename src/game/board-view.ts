@@ -120,6 +120,11 @@ export class BoardView {
   private dotGeo = new CircleGeometry(0.0042, 20);
   private ringGeo = new RingGeometry(0.003, 0.0044, 24);
   private warm = false;
+  /** Hint step 1: a pulsing ring on the corner to pinch. */
+  private hintRing: Mesh;
+  /** Hint step 2: the crease to fold along. */
+  private hintLine: Mesh;
+  private hintT = 0;
   private crease: Mesh;
   private creaseMat: MeshBasicMaterial;
   private outline: Mesh;
@@ -246,6 +251,16 @@ export class BoardView {
     this.card.rotation.set(-0.38, 0.32, 0);
     this.root.add(this.card);
 
+    const gold = { color: 0xffd166, transparent: true, depthWrite: false, depthTest: false };
+    this.hintRing = new Mesh(new RingGeometry(0.011, 0.0155, 40), new MeshBasicMaterial(gold));
+    this.hintRing.rotation.x = -Math.PI / 2;
+    this.hintRing.renderOrder = 72;
+    this.hintRing.visible = false;
+    this.hintLine = new Mesh(new PlaneGeometry(0.56, 0.0042), new MeshBasicMaterial(gold));
+    this.hintLine.renderOrder = 71;
+    this.hintLine.visible = false;
+    this.root.add(this.hintRing, this.hintLine);
+
     for (let i = 0; i < MAX_DOTS; i++) {
       const disc = new Mesh(this.dotGeo, new MeshBasicMaterial({ color: DOT_USED.clone() }));
       const ring = new Mesh(
@@ -261,6 +276,21 @@ export class BoardView {
       }
       this.dots.push({ disc, ring });
     }
+  }
+
+  /** Hint: ring around the board point to pinch (null hides it). */
+  showHintCorner(p: { x: number; y: number } | null) {
+    this.hintRing.visible = !!p;
+    if (p) this.hintRing.position.set(p.x, 0.007, -p.y);
+    this.hintT = 0;
+  }
+
+  /** Hint: the crease to fold along (null hides it). */
+  showHintLine(line: Line | null) {
+    this.hintLine.visible = !!line;
+    if (!line) return;
+    this.hintLine.position.set(line.nx * line.d, 0.0045, -line.ny * line.d);
+    this.hintLine.rotation.set(-Math.PI / 2, 0, Math.atan2(line.nx, -line.ny));
   }
 
   /** Fold dots: `used` of the `total` the solution needs; extra folds show in coral. */
@@ -336,6 +366,15 @@ export class BoardView {
   update(dt: number) {
     this.clock += dt;
     this.outlineMat.opacity = this.warm ? 1 : 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
+    this.hintT += dt;
+    if (this.hintRing.visible) {
+      const k = (this.hintT * 1.4) % 1;
+      this.hintRing.scale.setScalar(1 + k * 0.9);
+      (this.hintRing.material as MeshBasicMaterial).opacity = 1 - k;
+    }
+    if (this.hintLine.visible) {
+      (this.hintLine.material as MeshBasicMaterial).opacity = 0.55 + 0.4 * Math.sin(this.clock * 5);
+    }
     if (this.mini) {
       this.miniSpin += dt * 0.6;
       this.mini.rotation.y = this.miniSpin;

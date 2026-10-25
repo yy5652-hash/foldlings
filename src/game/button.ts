@@ -12,10 +12,24 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
+  PlaneGeometry,
   SRGBColorSpace,
 } from '@iwsdk/core';
 
-export type IconKind = 'undo' | 'restart' | 'hint' | 'next' | 'daily' | 'recenter' | 'sound' | 'mute' | 'back';
+export type IconKind =
+  | 'undo'
+  | 'restart'
+  | 'hint'
+  | 'next'
+  | 'daily'
+  | 'recenter'
+  | 'sound'
+  | 'mute'
+  | 'back'
+  | 'menu'
+  | 'close'
+  | 'album'
+  | 'settings';
 
 const RADIUS = 0.026;
 
@@ -129,10 +143,71 @@ function drawIcon(kind: IconKind): CanvasTexture {
       g.arc(128, 128, 14, 0, Math.PI * 2);
       g.fill();
       break;
+    case 'menu':
+      for (const y of [92, 128, 164]) {
+        g.beginPath();
+        g.moveTo(80, y);
+        g.lineTo(176, y);
+        g.stroke();
+      }
+      break;
+    case 'close':
+      g.beginPath();
+      g.moveTo(88, 88);
+      g.lineTo(168, 168);
+      g.moveTo(168, 88);
+      g.lineTo(88, 168);
+      g.stroke();
+      break;
+    case 'album':
+      // An open book.
+      g.beginPath();
+      g.moveTo(128, 92);
+      g.quadraticCurveTo(100, 78, 70, 86);
+      g.lineTo(70, 172);
+      g.quadraticCurveTo(100, 164, 128, 178);
+      g.quadraticCurveTo(156, 164, 186, 172);
+      g.lineTo(186, 86);
+      g.quadraticCurveTo(156, 78, 128, 92);
+      g.lineTo(128, 178);
+      g.stroke();
+      break;
+    case 'settings':
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        g.beginPath();
+        g.moveTo(128 + Math.cos(a) * 40, 128 + Math.sin(a) * 40);
+        g.lineTo(128 + Math.cos(a) * 62, 128 + Math.sin(a) * 62);
+        g.stroke();
+      }
+      g.beginPath();
+      g.arc(128, 128, 36, 0, Math.PI * 2);
+      g.stroke();
+      break;
   }
   const t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
   return t;
+}
+
+/** A one-word caption lying flat on the player's side of the token. */
+function labelMesh(text: string): Mesh {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 64;
+  const g = c.getContext('2d')!;
+  g.font = '600 40px system-ui, -apple-system, Segoe UI, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = 'rgba(246,240,228,0.92)';
+  g.fillText(text, 128, 34);
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  const m = new Mesh(new PlaneGeometry(0.064, 0.016), new MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(0, 0.0012, RADIUS + 0.013);
+  m.name = 'Label';
+  return m;
 }
 
 export class Button {
@@ -147,6 +222,7 @@ export class Button {
   constructor(
     readonly kind: IconKind,
     private onPress: () => void,
+    label = '',
   ) {
     this.root.name = `Button_${kind}`;
     const base = new Mesh(
@@ -169,6 +245,7 @@ export class Button {
     this.cap.add(body, face);
     this.cap.position.y = 0.004;
     this.root.add(this.cap);
+    if (label) this.root.add(labelMesh(label));
 
     const target = this.root as unknown as {
       addEventListener(type: string, fn: () => void): void;
