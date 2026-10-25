@@ -79,6 +79,77 @@ function bell(freq: number, gain: number, delay = 0) {
   tone(freq * 3.02, 0.5, gain * 0.15, delay);
 }
 
+/** A short-lived output that places a sound at `pos` (world metres). */
+function spot(pos?: { x: number; y: number; z: number }): AudioNode | null {
+  const a = audio();
+  if (!a || !master) return null;
+  if (!pos) return master;
+  const p = a.createPanner();
+  p.panningModel = 'HRTF';
+  p.distanceModel = 'inverse';
+  p.refDistance = 0.6;
+  p.rolloffFactor = 0.8;
+  p.positionX.value = pos.x;
+  p.positionY.value = pos.y;
+  p.positionZ.value = pos.z;
+  p.connect(master);
+  return p;
+}
+
+/** One pitched note with a glide; `f` lists [time, frequency] points. */
+function glide(
+  out: AudioNode,
+  f: [number, number][],
+  dur: number,
+  gain: number,
+  delay = 0,
+  type: OscillatorType = 'sine',
+  vibrato = 0,
+) {
+  const a = audio()!;
+  const t = a.currentTime + delay;
+  const o = a.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f[0][1], t);
+  for (const [at, hz] of f.slice(1)) o.frequency.exponentialRampToValueAtTime(hz, t + at);
+  if (vibrato > 0) {
+    const lfo = a.createOscillator();
+    const depth = a.createGain();
+    lfo.frequency.value = 6;
+    depth.gain.value = vibrato;
+    lfo.connect(depth).connect(o.frequency);
+    lfo.start(t);
+    lfo.stop(t + dur + 0.05);
+  }
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + Math.min(0.03, dur * 0.2));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(out);
+  o.start(t);
+  o.stop(t + dur + 0.05);
+}
+
+/** Keeps spatial sounds in step with the player's head. */
+export function setListener(pos: { x: number; y: number; z: number }, fwd: { x: number; y: number; z: number }) {
+  const a = ctx;
+  if (!a) return;
+  const l = a.listener;
+  if (l.positionX) {
+    l.positionX.value = pos.x;
+    l.positionY.value = pos.y;
+    l.positionZ.value = pos.z;
+    l.forwardX.value = fwd.x;
+    l.forwardY.value = fwd.y;
+    l.forwardZ.value = fwd.z;
+    l.upX.value = 0;
+    l.upY.value = 1;
+    l.upZ.value = 0;
+  }
+}
+
+const BEAT_NOTES = [392.0, 523.25, 659.25, 783.99, 1046.5];
+
 export const sfx = {
   pick() {
     rustle(0.12, 2600, 1.2, 0.18);
@@ -153,6 +224,54 @@ export const sfx = {
   splash() {
     rustle(0.4, 1200, 0.5, 0.25);
     tone(300, 0.2, 0.05, 0.05);
+  },
+  /** One beat of a creature folding itself up: a crisp crease and a note. */
+  foldBeat(i: number) {
+    rustle(0.09, 3400, 1.4, 0.22);
+    tone(BEAT_NOTES[Math.min(i, BEAT_NOTES.length - 1)], 0.5, 0.07, 0.02);
+  },
+  /** A rising shimmer as the creature finishes and wakes up. */
+  awaken() {
+    [1046.5, 1318.5, 1568, 2093].forEach((f, i) => bell(f, 0.05, i * 0.05));
+    rustle(0.5, 5200, 0.6, 0.08);
+  },
+  /** Each kind's own call, placed where the creature is. */
+  voice(kind: string, pos?: { x: number; y: number; z: number }, loud = 1) {
+    const out = spot(pos);
+    if (!out) return;
+    const v = 0.09 * loud;
+    switch (kind) {
+      case 'crane':
+        glide(out, [[0, 880], [0.12, 1180]], 0.2, v, 0, 'sine', 18);
+        glide(out, [[0, 990], [0.14, 1320]], 0.24, v, 0.22, 'sine', 18);
+        break;
+      case 'frog':
+        for (let i = 0; i < 2; i++) glide(out, [[0, 190], [0.1, 120]], 0.12, v * 1.1, i * 0.13, 'sawtooth');
+        break;
+      case 'fox':
+        glide(out, [[0, 900], [0.05, 1500], [0.14, 760]], 0.16, v, 0, 'triangle');
+        glide(out, [[0, 950], [0.05, 1550], [0.12, 820]], 0.14, v * 0.7, 0.2, 'triangle');
+        break;
+      case 'fish':
+        for (let i = 0; i < 3; i++) glide(out, [[0, 520 + i * 90], [0.05, 1300 + i * 120]], 0.07, v * 0.8, i * 0.09);
+        break;
+      case 'butterfly':
+        [1568, 1976, 2349].forEach((f, i) => glide(out, [[0, f], [0.3, f * 1.01]], 0.35, v * 0.45, i * 0.06));
+        for (let i = 0; i < 3; i++) rustle(0.05, 2400, 2, 0.06, i * 0.06);
+        break;
+      case 'boat':
+        glide(out, [[0, 330], [0.4, 322]], 0.45, v * 0.8, 0, 'triangle');
+        glide(out, [[0, 495], [0.4, 483]], 0.45, v * 0.4, 0);
+        break;
+      case 'rabbit':
+        glide(out, [[0, 1800], [0.06, 2400]], 0.08, v * 0.8);
+        glide(out, [[0, 1900], [0.06, 2500]], 0.08, v * 0.7, 0.11);
+        break;
+      default:
+        // Whale: a slow song that rises and falls.
+        glide(out, [[0, 220], [0.6, 160], [1.3, 250]], 1.4, v * 1.2, 0, 'sine', 4);
+        glide(out, [[0, 440], [0.6, 320], [1.3, 500]], 1.4, v * 0.35, 0, 'sine', 6);
+    }
   },
 };
 

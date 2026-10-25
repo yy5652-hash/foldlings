@@ -19,7 +19,7 @@ import { paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
-import { audioContext, audioDestination, isMuted, setMuted, startMusic, stopMusic } from './sfx.js';
+import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Menagerie } from './menagerie.js';
 import { floatingPlacement, Placement, tablePlacement } from './placement.js';
 import {
@@ -64,7 +64,17 @@ export class GameSystem extends createSystem({
   private yawTo = 0;
   private moveT = 1;
   private up = new Vector3(0, 1, 0);
-  private celebrate: { t: number; level: Level; revealed: boolean; vanished: boolean } | null = null;
+  private celebrate: {
+    t: number;
+    level: Level;
+    revealed: boolean;
+    vanished: boolean;
+    where: string;
+    sayAt: number;
+    nextAt: number;
+  } | null = null;
+  private ear = new Vector3();
+  private earFwd = new Vector3();
   private galleryItems: Creature[] = [];
   private vroom!: VirtualRoom;
   private scan = new RoomScan();
@@ -96,7 +106,7 @@ export class GameSystem extends createSystem({
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
       onSolved: (level) => {
-        this.celebrate = { t: 0, level, revealed: false, vanished: false };
+        this.celebrate = { t: 0, level, revealed: false, vanished: false, where: '', sayAt: Infinity, nextAt: Infinity };
       },
       onDaily: () => this.toggleDaily(),
       footer: () => {
@@ -311,22 +321,16 @@ export class GameSystem extends createSystem({
       const b = paperBounds(this.game.paper);
       const from = new Vector3((b.minX + b.maxX) / 2, 0.025, -(b.minY + b.maxY) / 2);
       this.game.boardRoot.localToWorld(from);
-      const where = this.zoo.reveal(
+      const { where, prelude } = this.zoo.reveal(
         c.level.creature,
         Math.max(0, LOOKS.indexOf(c.level.look)),
         from,
         this.boardWorld(),
       );
-      const name = c.level.creature;
-      const swims = name === 'fish' || name === 'whale';
-      this.game.say(
-        where
-          ? `The ${name} settled on your ${where}`
-          : swims
-            ? `The ${name} is swimming around you`
-            : `The ${name} is flying around you`,
-        4.2,
-      );
+      // Speak once it has folded itself up and is about to set off.
+      c.where = where;
+      c.sayAt = c.t + prelude;
+      c.nextAt = c.t + prelude + 0.5;
       if (this.game.isDaily) {
         const days = new Set(this.progress.daily ?? []);
         days.add(dayNumber());
@@ -337,7 +341,20 @@ export class GameSystem extends createSystem({
       }
       this.saveProgress();
     }
-    if (c.t > 2.6) {
+    if (c.t > c.sayAt) {
+      c.sayAt = Infinity;
+      const name = c.level.creature;
+      const swims = name === 'fish' || name === 'whale';
+      this.game.say(
+        c.where
+          ? `The ${name} is off to your ${c.where}`
+          : swims
+            ? `The ${name} will swim around you`
+            : `The ${name} will fly around you`,
+        4,
+      );
+    }
+    if (c.t > c.nextAt) {
       this.celebrate = null;
       this.game.loadLevel(this.progress.level);
       this.game.button('daily')?.setIcon('daily');
@@ -400,6 +417,9 @@ export class GameSystem extends createSystem({
       root.quaternion.setFromAxisAngle(this.up, this.yawFrom + (this.yawTo - this.yawFrom) * e);
     }
     if (this.celebrate) this.updateCelebration(delta);
+    this.world.camera.getWorldPosition(this.ear);
+    this.world.camera.getWorldDirection(this.earFwd);
+    setListener(this.ear, this.earFwd);
     this.game.update(delta, time);
     this.zoo.update(delta);
     this.scan.update(delta);

@@ -73,7 +73,18 @@ interface Travel {
   hops: number;
   arc: number;
   endQuat: Quaternion;
+  /** Where the paper was; the creature folds itself up above it first. */
+  start: Vector3;
+  /** Seconds of fold-up and wake before it sets off. */
+  prelude: number;
+  woke: boolean;
+  normal: Vector3 | null;
 }
+
+/** Hover height above the mat while a creature folds itself up. */
+const HOVER = 0.12;
+const LIFT = 0.4;
+const WAKE = 0.9;
 
 /** Where a travelling creature is at progress u (room frame). */
 function travelPoint(tr: Travel, u: number, out: Vector3): Vector3 {
@@ -175,6 +186,7 @@ export class Menagerie {
   private saved: SavedCreature[] = [];
   private surfaces: Surface[] = [];
   private confetti: Confetti;
+  private shock = new Shockwave();
   private marker = new HomeMarker();
   private markerTime = 0;
   private placedThisSession = false;
@@ -194,6 +206,7 @@ export class Menagerie {
     }
     this.confetti = new Confetti();
     world.createTransformEntity(this.confetti.mesh);
+    world.createTransformEntity(this.shock.mesh);
     this.room.root.add(this.marker.root);
     // Each mode (flat page, VR, passthrough) shows its own placement of the
     // zoo, so switching modes starts the creatures afresh.
@@ -464,7 +477,7 @@ export class Menagerie {
   }
 
   /** A new creature pops out of the paper at `from` and goes home. */
-  reveal(kind: CreatureKind, look: number, from: Vector3, avoid: Vector3): string {
+  reveal(kind: CreatureKind, look: number, from: Vector3, avoid: Vector3): { where: string; prelude: number } {
     const { c, entity } = this.spawnEntity(kind, look);
     const home = this.findHome(c.habitat, avoid);
     const rest = this.restPose(home.pos, home.normal);
@@ -479,38 +492,44 @@ export class Menagerie {
     const live: Live = { c, entity, saved, travel: null, orbit: null, endAir: home.air };
     this.live.push(live);
 
-    const fromLocal = this.toRoom(from);
+    const startLocal = this.toRoom(from);
+    const fromLocal = startLocal.clone();
+    fromLocal.y += HOVER;
     const toLocal = new Vector3().fromArray(rest.p);
-    c.root.position.copy(fromLocal);
-    c.root.scale.setScalar(0.001);
-    this.confetti.burst(from, LOOKS[look % LOOKS.length].front);
+    c.root.position.copy(startLocal);
+    c.root.scale.setScalar(0.35);
+    c.startFoldUp();
     sfx.pop();
+    const prelude = c.foldDuration + WAKE;
 
     const flying = c.habitat !== 'ground';
     const dist = fromLocal.distanceTo(toLocal);
     live.travel = {
       from: fromLocal,
       to: toLocal,
-      t: -1.4, // grow and look around first
+      t: -prelude, // fold up, wake, look at the player first
       dur: Math.min(4.5, 1.4 + dist * (flying ? 0.9 : 1.3)),
       mode: flying ? 'fly' : 'hop',
       hops: Math.max(2, Math.round(dist / 0.28)),
       arc: flying ? 0.25 + dist * 0.15 : 0.07,
       endQuat: rest.quat,
+      start: startLocal,
+      prelude,
+      woke: false,
+      normal: rest.n ? new Vector3().fromArray(rest.n) : null,
     };
-    const localNormal = rest.n ? new Vector3().fromArray(rest.n) : null;
-    this.marker.show(live.travel, localNormal);
-    this.markerTime = live.travel.dur + 1.4;
     this.saved.push(saved);
     this.save();
-    return home.where;
+    return { where: home.where, prelude };
   }
 
   update(dt: number) {
     this.confetti.update(dt);
+    this.shock.update(dt);
     this.marker.update(dt, this.markerTime);
     const head = this.head();
     for (const l of this.live) {
+      l.c.lookAt(!l.travel || l.travel.t < 0 ? head : null);
       l.c.update(dt);
       // Now and then a resting creature stirs on its own (about every 40 s).
       if (!l.travel && Math.random() < dt / 40) l.c.fidget(Math.random() < 0.3);
@@ -536,15 +555,25 @@ export class Menagerie {
     const root = l.c.root;
     tr.t += dt;
     if (tr.t < 0) {
-      // Pop in, then turn to look at the player.
-      const g = Math.min(1, (tr.t + 1.4) / 0.45);
-      const s = g < 1 ? 1 - Math.pow(1 - g, 3) * Math.cos(g * 9) : 1;
-      root.scale.setScalar(Math.max(0.001, s));
-      root.position.y = tr.from.y + Math.sin(Math.min(1, g) * Math.PI) * 0.04;
+      // Rise off the mat with half a turn while folding up, then wake facing the player.
+      const since = tr.t + tr.prelude;
+      const e = 1 - Math.pow(1 - Math.min(1, since / LIFT), 3);
+      root.scale.setScalar(0.35 + 0.65 * e);
+      root.position.lerpVectors(tr.start, tr.from, e);
+      root.position.y += Math.sin(since * 3.2) * 0.006 * e;
       const local = this.toRoom(head);
       const yaw = Math.atan2(local.x - root.position.x, local.z - root.position.z) + Math.PI;
-      root.rotation.set(0, yaw, 0);
-      if (tr.t > -0.6 && tr.t - dt <= -0.6) l.c.poke();
+      root.rotation.set(0, yaw + Math.PI * (1 - e), 0);
+      if (!tr.woke && !l.c.folding && since > LIFT) {
+        tr.woke = true;
+        const at = root.getWorldPosition(this.tmp);
+        this.confetti.burst(at, LOOKS[l.saved.look % LOOKS.length].front);
+        this.shock.burst(at);
+        sfx.awaken();
+        l.c.poke();
+        this.marker.show(tr, tr.normal);
+        this.markerTime = tr.dur - tr.t;
+      }
       const sh = root.getObjectByName('Shadow');
       if (sh) sh.visible = false;
       return;
@@ -678,3 +707,42 @@ class Confetti {
   }
 }
 
+
+/** A bright ring that sweeps outwards when a creature wakes up. */
+class Shockwave {
+  readonly mesh: Mesh;
+  private life = 0;
+
+  constructor() {
+    this.mesh = new Mesh(
+      new RingGeometry(0.92, 1, 64),
+      new MeshBasicMaterial({
+        color: 0xffd166,
+        transparent: true,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        side: DoubleSide,
+      }),
+    );
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.visible = false;
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 60;
+  }
+
+  burst(at: Vector3) {
+    this.mesh.position.copy(at);
+    this.mesh.position.y -= 0.06;
+    this.life = 1;
+    this.mesh.visible = true;
+  }
+
+  update(dt: number) {
+    if (this.life <= 0) return;
+    this.life = Math.max(0, this.life - dt / 0.7);
+    const u = 1 - this.life;
+    this.mesh.scale.setScalar(0.03 + (1 - Math.pow(1 - u, 3)) * 0.42);
+    (this.mesh.material as MeshBasicMaterial).opacity = this.life * 0.9;
+    if (this.life <= 0) this.mesh.visible = false;
+  }
+}
