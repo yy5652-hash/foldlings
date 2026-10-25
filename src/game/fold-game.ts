@@ -61,6 +61,8 @@ interface Drag {
   snap: Snap | null;
   angle: number;
   startedAt: number;
+  /** The fold under the hand would solve the puzzle. */
+  solves: boolean;
 }
 
 interface Settle {
@@ -217,7 +219,7 @@ export class FoldGame {
       if (s) this.prefixes.push(rasterize(s));
     }
     this.textures.setLook(level.look, seed);
-    this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '');
+    this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '', level.creature);
     this.restart();
   }
 
@@ -300,6 +302,7 @@ export class FoldGame {
     this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
     this.board.setGhostOpacity(0.55);
+    this.board.setFoldCount(0, this.level.solution.length);
   }
 
   undo() {
@@ -312,6 +315,7 @@ export class FoldGame {
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.solved = false;
+    this.board.setFoldCount(this.folds, this.level.solution.length);
   }
 
   hint() {
@@ -475,6 +479,7 @@ export class FoldGame {
       snap: null,
       angle: 0,
       startedAt: this.time,
+      solves: false,
     };
     sfx.pick();
   }
@@ -571,7 +576,9 @@ export class FoldGame {
     if (this.drag) this.updateDrag(dt);
     if (this.settle) this.updateSettle(dt);
     this.glow = Math.max(0, this.glow - dt * 1.2);
-    this.paperView.setGlow(this.glow > 0 ? Math.sin(this.glow * Math.PI) : 0);
+    // A soft pulse while the fold under the hand would solve the puzzle.
+    const warm = this.drag?.solves ? 0.22 + 0.12 * Math.sin(this.time * 9) : 0;
+    this.paperView.setGlow(this.glow > 0 ? Math.sin(this.glow * Math.PI) : warm);
   }
 
   /** Shows a short line on the caption strip for a few seconds. */
@@ -638,8 +645,13 @@ export class FoldGame {
       if (snap) {
         const parts = splitPaper(this.paper, snap.line, snap.s)!;
         this.paperView.setSplit(parts.stay, parts.move, snap.line, snap.s);
-        sfx.snap();
+        const result = foldPaper(this.paper, snap.line, snap.s);
+        const solves = !!result && rasterMatch(rasterize(result), this.target) >= 0.999;
+        if (solves && !d.solves) sfx.warm();
+        else sfx.snap();
+        d.solves = solves;
       } else {
+        d.solves = false;
         this.paperView.setPaper(this.paper);
       }
     }
@@ -653,7 +665,7 @@ export class FoldGame {
     const k = immediate ? 1 : 1 - Math.exp(-dt * 22);
     d.angle += (target - d.angle) * k;
     this.paperView.setFlapAngle(d.angle);
-    this.board.showCrease(d.snap.line, d.angle > Math.PI / 2);
+    this.board.showCrease(d.snap.line, d.angle > Math.PI / 2, d.solves);
   }
 
   private updateSettle(dt: number) {
@@ -692,6 +704,7 @@ export class FoldGame {
     this.folds++;
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
+    this.board.setFoldCount(this.folds, this.level.solution.length);
     sfx.fold();
     if (rasterMatch(rasterize(this.paper), this.target) >= 0.999) {
       this.solved = true;

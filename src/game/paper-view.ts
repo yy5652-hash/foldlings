@@ -15,7 +15,7 @@ import {
   ShaderMaterial,
   Vector3,
 } from '@iwsdk/core';
-import { applyAffine, clipConvex, Line, polygonArea, V2 } from '../fold/geom.js';
+import { applyAffine, clipConvex, Line, polygonArea, reflectPoint, V2 } from '../fold/geom.js';
 import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
 import type { PaperTextures } from './paper-texture.js';
 
@@ -147,6 +147,15 @@ export class PaperView {
     opacity: 0.28,
     depthWrite: false,
   });
+  /** Darkens where the flap will land, deepening as it lifts. */
+  private landing = new Group();
+  private landMat = new MeshBasicMaterial({
+    color: new Color(0x1a1410),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: DoubleSide,
+  });
   private flapSign: 1 | -1 = 1;
   private axis = new Vector3();
   private q = new Quaternion();
@@ -155,7 +164,7 @@ export class PaperView {
     this.root.name = 'Paper';
     this.matFront = makePaperMaterial(textures, false);
     this.matBack = makePaperMaterial(textures, true);
-    this.root.add(this.stack, this.flapPivot);
+    this.root.add(this.stack, this.landing, this.flapPivot);
     this.flapPivot.add(this.flapInner);
   }
 
@@ -168,6 +177,7 @@ export class PaperView {
   setPaper(state: PaperState) {
     this.clearGroup(this.stack);
     this.clearGroup(this.flapInner);
+    this.clearGroup(this.landing);
     this.addFacets(this.stack, state.facets, 0);
   }
 
@@ -196,6 +206,13 @@ export class PaperView {
       0,
       false,
     );
+    this.clearGroup(this.landing);
+    for (const f of move) {
+      const land = { ...f, poly: f.poly.map((p) => reflectPoint(line, p)) };
+      const m = new Mesh(facetGeometry(land, hingeY + LAYER_GAP * 0.3), this.landMat);
+      m.renderOrder = 40;
+      this.landing.add(m);
+    }
     this.axis.set(-line.ny, 0, -line.nx).normalize();
     this.flapSign = movingSign;
     this.setFlapAngle(0);
@@ -205,6 +222,7 @@ export class PaperView {
   setFlapAngle(angle: number) {
     this.q.setFromAxisAngle(this.axis, -this.flapSign * angle);
     this.flapPivot.quaternion.copy(this.q);
+    this.landMat.opacity = 0.2 * Math.max(0, Math.sin(Math.min(Math.PI, angle)));
   }
 
   private addFacets(group: Group, facets: readonly Facet[], lift: number) {
@@ -244,5 +262,7 @@ export class PaperView {
     this.matFront.dispose();
     this.matBack.dispose();
     this.edgeMat.dispose();
+    this.clearGroup(this.landing);
+    this.landMat.dispose();
   }
 }

@@ -225,6 +225,12 @@ export const sfx = {
     rustle(0.4, 1200, 0.5, 0.25);
     tone(300, 0.2, 0.05, 0.05);
   },
+  /** The fold under your hand would solve it: a soft, bright "this is it". */
+  warm() {
+    tone(1318.5, 0.35, 0.05, 0);
+    tone(1975.5, 0.45, 0.04, 0.07);
+    tone(1900, 0.05, 0.05, 0, 'triangle');
+  },
   /** One beat of a creature folding itself up: a crisp crease and a note. */
   foldBeat(i: number) {
     rustle(0.09, 3400, 1.4, 0.22);

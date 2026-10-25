@@ -127,6 +127,9 @@ export default async function ({ page, frame, cdp, signal }) {
       steps: [
         { label: 'reach', position: { $board: [grab.x, grab.y, 0.004] }, anchor: 'grasp', pinch: { value: 1, at: 'arrival' }, duration: 1.0 / sp },
         { label: 'lift', position: { $board: [mid.x + (grab.x - mid.x) * 0.3, mid.y + (grab.y - mid.y) * 0.3, 0.085] }, anchor: 'grasp', duration: 0.6 / sp },
+        ...(opt.hold
+          ? [{ label: 'hold', position: { $board: opt.holdAt === 'dest' ? [dest.x * 0.8, dest.y * 0.8, 0.05] : [mid.x, mid.y, 0.11] }, anchor: 'grasp', duration: opt.hold }]
+          : []),
         { label: 'over', position: { $board: [dest.x, dest.y, 0.012] }, anchor: 'grasp', duration: 0.6 / sp },
         { label: 'release', pinch: 0, duration: 0.18 },
         { label: 'back', position: { $board: opt.rest ?? [0.16, -0.22, 0.16] }, anchor: 'grasp', duration: 0.6 / sp },

@@ -4,16 +4,21 @@
  */
 
 import {
+  Box3,
   BufferGeometry,
   CanvasTexture,
+  CircleGeometry,
   Color,
   Float32BufferAttribute,
   CylinderGeometry,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Mesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
   PlaneGeometry,
+  RingGeometry,
   Shape,
   ShapeGeometry,
   SRGBColorSpace,
@@ -21,7 +26,13 @@ import {
 } from '@iwsdk/core';
 import { Line, unionOutline } from '../fold/geom.js';
 import { BOARD, Facet, GRID } from '../fold/paper.js';
+import { buildRig } from './creature-models.js';
+import type { CreatureKind } from './levels.js';
 import type { PaperLook } from './paper-texture.js';
+
+const DOT_USED = new Color(0xf6f0e4);
+const DOT_OVER = new Color(0xff8a6a);
+const MAX_DOTS = 8;
 
 export const MAT_W = 0.5;
 export const MAT_D = 0.44;
@@ -101,6 +112,14 @@ export class BoardView {
   private cardCanvas: HTMLCanvasElement;
   private cardTex: CanvasTexture;
   readonly card: Group;
+  /** The creature this puzzle becomes, turning slowly above the card. */
+  private mini: Group | null = null;
+  private miniSpin = 0;
+  /** One dot per fold the solution needs, filled as folds are made. */
+  private dots: { disc: Mesh; ring: Mesh }[] = [];
+  private dotGeo = new CircleGeometry(0.0042, 20);
+  private ringGeo = new RingGeometry(0.003, 0.0044, 24);
+  private warm = false;
   private crease: Mesh;
   private creaseMat: MeshBasicMaterial;
   private outline: Mesh;
@@ -226,6 +245,58 @@ export class BoardView {
     this.card.position.set(-0.17, 0, -0.245);
     this.card.rotation.set(-0.38, 0.32, 0);
     this.root.add(this.card);
+
+    for (let i = 0; i < MAX_DOTS; i++) {
+      const disc = new Mesh(this.dotGeo, new MeshBasicMaterial({ color: DOT_USED.clone() }));
+      const ring = new Mesh(
+        this.ringGeo,
+        new MeshBasicMaterial({ color: DOT_USED, transparent: true, opacity: 0.55, depthWrite: false }),
+      );
+      // Along the bottom of the goal picture on the card.
+      for (const m of [disc, ring]) {
+        m.position.set(0, 0.041, 0.0015);
+        m.visible = false;
+        m.renderOrder = 3;
+        this.card.add(m);
+      }
+      this.dots.push({ disc, ring });
+    }
+  }
+
+  /** Fold dots: `used` of the `total` the solution needs; extra folds show in coral. */
+  setFoldCount(used: number, total: number) {
+    for (let i = 0; i < MAX_DOTS; i++) {
+      const { disc, ring } = this.dots[i];
+      const x = (i - (Math.max(total, used) - 1) / 2) * 0.012;
+      disc.position.x = ring.position.x = x;
+      ring.visible = i < total;
+      disc.visible = i < Math.min(used, MAX_DOTS);
+      (disc.material as MeshBasicMaterial).color.copy(i < total ? DOT_USED : DOT_OVER);
+    }
+  }
+
+  /** The creature that this puzzle becomes, shown small above the card. */
+  private setMini(kind: CreatureKind, look: PaperLook) {
+    if (this.mini) {
+      this.root.remove(this.mini);
+      this.mini.traverse((o) => {
+        const m = o as Mesh;
+        if (m.isMesh && m.name === 'Paper') m.geometry.dispose();
+        if ((o as LineSegments).isLineSegments) {
+          (o as LineSegments).geometry.dispose();
+          ((o as LineSegments).material as LineBasicMaterial).dispose();
+        }
+      });
+    }
+    const rig = buildRig(kind, look.front, look.back).root;
+    const size = new Box3().setFromObject(rig).getSize(new Vector3());
+    const holder = new Group();
+    holder.name = 'GoalCreature';
+    rig.scale.setScalar(0.085 / Math.max(size.x, size.y, size.z));
+    holder.add(rig);
+    holder.position.set(-0.17, 0.18, -0.29);
+    this.root.add(holder);
+    this.mini = holder;
   }
 
   private buildOutline(facets: readonly Facet[]) {
@@ -264,14 +335,27 @@ export class BoardView {
   /** Gentle breathing of the goal outline. */
   update(dt: number) {
     this.clock += dt;
-    this.outlineMat.opacity = 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
+    this.outlineMat.opacity = this.warm ? 1 : 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
+    if (this.mini) {
+      this.miniSpin += dt * 0.6;
+      this.mini.rotation.y = this.miniSpin;
+      this.mini.position.y = 0.18 + Math.sin(this.clock * 1.6) * 0.006;
+    }
   }
 
   setOutlineVisible(v: boolean) {
     this.outline.visible = v;
   }
 
-  setGoal(facets: readonly Facet[], look: PaperLook, title: string, subtitle: string, footer = '') {
+  setGoal(
+    facets: readonly Facet[],
+    look: PaperLook,
+    title: string,
+    subtitle: string,
+    footer = '',
+    kind?: CreatureKind,
+  ) {
+    if (kind) this.setMini(kind, look);
     this.buildOutline(facets);
     this.outline.visible = true;
     const g = this.ghostCanvas.getContext('2d')!;
@@ -320,7 +404,9 @@ export class BoardView {
   }
 
   /** Shows the crease guide along `line`, clipped to [lo, hi] along the line. */
-  showCrease(line: Line | null, highlight = false) {
+  showCrease(line: Line | null, highlight = false, solves = false) {
+    this.warm = !!line && solves;
+    this.outlineMat.color.set(this.warm ? 0xffd166 : 0xffffff);
     if (!line) {
       this.crease.visible = false;
       return;
@@ -330,12 +416,12 @@ export class BoardView {
     // Span the board square.
     const span = 0.56;
     this.crease.visible = true;
-    this.crease.scale.set(span, 1, 1);
+    this.crease.scale.set(span, solves ? 2.4 : 1, 1);
     this.crease.position.set(fx, 0.0035, -fy);
     // Plane's long axis is local x; rotate around world up to the line direction.
     const angle = Math.atan2(line.nx, -line.ny);
     this.crease.rotation.set(-Math.PI / 2, 0, angle);
-    this.creaseMat.color.set(highlight ? 0xffd166 : 0xfff6d8);
+    this.creaseMat.color.set(solves ? 0xffc53d : highlight ? 0xffd166 : 0xfff6d8);
   }
 
   boardToLocal(x: number, y: number, h: number, out: Vector3): Vector3 {
