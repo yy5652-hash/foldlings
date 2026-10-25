@@ -24,7 +24,9 @@ import {
   DoubleSide,
   Entity,
 } from '@iwsdk/core';
+import { CREATURE_KINDS } from './creature-models.js';
 import { Creature, Habitat } from './creatures.js';
+import type { Hands, HandState } from './hands.js';
 import type { CreatureKind } from './levels.js';
 import { LOOKS } from './levels.js';
 import { RoomFrame, safeGet, safeSet, Surface } from './room.js';
@@ -54,6 +56,12 @@ interface Live {
   orbit: { center: Vector3; radius: number; speed: number; phase: number } | null;
   /** Starts circling once it arrives. */
   endAir: boolean;
+  /** Riding on an open palm. */
+  perch?: { hand: HandState; t: number; from: Vector3; lost: number } | null;
+  /** Seconds an open palm has waited beside it. */
+  hover?: number;
+  /** Countdown to a cheer or greeting hop. */
+  cheerIn?: number;
 }
 
 interface Home {
@@ -194,6 +202,11 @@ export class Menagerie {
   realRoom = false;
   private avoid = new Vector3(0, -10, 0);
   private tmp = new Vector3();
+  private tmp2 = new Vector3();
+  /** Tracked hands, for palm rides and waves (null outside XR hands). */
+  hands: Hands | null = null;
+  /** While the player folds, nearby creatures watch the paper. */
+  watch: Vector3 | null = null;
 
   constructor(
     private world: World,
@@ -528,8 +541,20 @@ export class Menagerie {
     this.shock.update(dt);
     this.marker.update(dt, this.markerTime);
     const head = this.head();
+    if (this.hands?.waved) this.greet(head, 4);
     for (const l of this.live) {
-      l.c.lookAt(!l.travel || l.travel.t < 0 ? head : null);
+      const watching = this.watch && !l.travel && l.c.root.getWorldPosition(this.tmp2).distanceTo(this.watch) < 2.2;
+      l.c.lookAt(watching ? this.watch : !l.travel || l.travel.t < 0 ? head : null);
+      if (l.cheerIn !== undefined && l.cheerIn > 0) {
+        l.cheerIn -= dt;
+        if (l.cheerIn <= 0) l.c.poke();
+      }
+      if (l.perch) {
+        l.c.update(dt);
+        this.stepPerch(l, dt, head);
+        continue;
+      }
+      if (!l.travel && this.hands) this.checkPalm(l, dt);
       l.c.update(dt);
       // Now and then a resting creature stirs on its own (about every 40 s).
       if (!l.travel && Math.random() < dt / 40) l.c.fidget(Math.random() < 0.3);
@@ -596,6 +621,110 @@ export class Menagerie {
       l.c.setTravelling(false);
       if (l.endAir) this.startOrbit(l);
     }
+  }
+
+  /** Paper looks folded per kind, oldest first, for the album. */
+  collection(): { kind: CreatureKind; looks: number[] }[] {
+    return CREATURE_KINDS.map((kind) => ({
+      kind,
+      looks: this.saved.filter((s) => s.kind === kind).map((s) => s.look),
+    }));
+  }
+
+  /** Every creature in view hops and calls, one after another (a solve). */
+  cheer() {
+    let i = 0;
+    for (const l of this.live) if (!l.travel && !l.perch) l.cheerIn = 0.15 + i++ * 0.13;
+  }
+
+  /** Creatures near the player answer a wave, nearest first. */
+  private greet(head: Vector3, range: number) {
+    for (const l of this.live) {
+      const d = l.c.root.getWorldPosition(this.tmp2).distanceTo(head);
+      if (d < range && !l.travel) l.cheerIn = 0.1 + d * 0.15;
+    }
+  }
+
+  /** An open palm held still beside a resting creature invites it to hop on. */
+  private checkPalm(l: Live, dt: number) {
+    if (l.orbit || l.c.habitat === 'air' || l.c.habitat === 'high-air') return;
+    const at = l.c.root.getWorldPosition(this.tmp2);
+    let near: HandState | null = null;
+    for (let k = 0; k < 2; k++) {
+      const h = k === 0 ? this.hands!.left : this.hands!.right;
+      if (!h.tracked || !h.open || h.normal.y < 0.7 || h.vel.length() > 0.5) continue;
+      let taken = false;
+      for (const o of this.live) if (o.perch?.hand === h) taken = true;
+      if (taken) continue;
+      const dx = h.center.x - at.x;
+      const dz = h.center.z - at.z;
+      const dy = h.center.y - at.y;
+      if (dx * dx + dz * dz < 0.22 * 0.22 && dy > -0.06 && dy < 0.5) near = h;
+    }
+    l.hover = near ? (l.hover ?? 0) + dt : 0;
+    if (near) l.c.lookAt(near.center);
+    if (near && l.hover > 0.5) {
+      l.perch = { hand: near, t: 0, from: l.c.root.position.clone(), lost: 0 };
+      l.hover = 0;
+      l.c.poke();
+    }
+  }
+
+  private stepPerch(l: Live, dt: number, head: Vector3) {
+    const pr = l.perch!;
+    const h = pr.hand;
+    const root = l.c.root;
+    pr.t += dt;
+    const ok = h.tracked && h.open && h.normal.y > 0.35;
+    pr.lost = ok ? 0 : pr.lost + dt;
+    if (pr.lost > 0.3) {
+      this.hopHome(l);
+      return;
+    }
+    if (h.tracked) {
+      this.tmp2.copy(h.center).addScaledVector(h.normal, 0.012);
+      this.room.root.updateWorldMatrix(true, false);
+      this.room.root.worldToLocal(this.tmp2);
+    }
+    const u = Math.min(1, pr.t / 0.45);
+    if (u < 1) {
+      root.position.lerpVectors(pr.from, this.tmp2, u);
+      root.position.y += Math.sin(u * Math.PI) * 0.08;
+    } else {
+      root.position.lerp(this.tmp2, Math.min(1, dt * 25));
+    }
+    const local = this.toRoom(head);
+    root.rotation.set(0, Math.atan2(local.x - root.position.x, local.z - root.position.z) + Math.PI, 0);
+    const sh = root.getObjectByName('Shadow');
+    if (sh) sh.visible = false;
+    l.c.lookAt(head);
+  }
+
+  /** Back to its own spot when the palm turns over or goes away. */
+  private hopHome(l: Live) {
+    l.perch = null;
+    const from = l.c.root.position.clone();
+    const to = new Vector3().fromArray(l.saved.p);
+    const endQuat = l.saved.n
+      ? new Quaternion().setFromUnitVectors(UP, new Vector3().fromArray(l.saved.n))
+      : new Quaternion().setFromAxisAngle(UP, l.saved.yaw);
+    const flying = l.c.habitat !== 'ground';
+    const dist = from.distanceTo(to);
+    l.travel = {
+      from,
+      to,
+      t: 0,
+      dur: Math.min(3, 0.5 + dist * (flying ? 0.9 : 1.2)),
+      mode: flying ? 'fly' : 'hop',
+      hops: Math.max(1, Math.round(dist / 0.28)),
+      arc: flying ? 0.15 + dist * 0.1 : 0.07,
+      endQuat,
+      start: from,
+      prelude: 0,
+      woke: true,
+      normal: null,
+    };
+    l.c.poke();
   }
 
   /** World positions of the creatures on show (tests, film). */

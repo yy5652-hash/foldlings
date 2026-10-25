@@ -20,7 +20,10 @@ import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
+import { Album } from './album.js';
+import { Hands } from './hands.js';
 import { Menagerie } from './menagerie.js';
+import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
 import { TitleCard } from './title.js';
 import { floatingPlacement, Placement, tablePlacement } from './placement.js';
@@ -77,6 +80,13 @@ export class GameSystem extends createSystem({
   } | null = null;
   private ear = new Vector3();
   private menu!: PalmMenu;
+  private album!: Album;
+  private hands!: Hands;
+  private watchPoint = new Vector3();
+  /** Real furniture and walls hide creatures behind them (passthrough only). */
+  private occluders = new Occluders();
+  private occluderKey = '';
+  private occluderCheck = 0;
   private title = new TitleCard();
   private titleShown = false;
   private earFwd = new Vector3();
@@ -108,9 +118,13 @@ export class GameSystem extends createSystem({
     this.world.createTransformEntity(this.scan.root);
     this.room = new RoomFrame(this.world);
     this.zoo = new Menagerie(this.world, this.room);
+    this.hands = new Hands(this.world);
+    this.world.createTransformEntity(this.occluders.root);
+    this.zoo.hands = this.hands;
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
       onSolved: (level) => {
+        this.zoo.cheer();
         this.celebrate = { t: 0, level, revealed: false, vanished: false, where: '', sayAt: Infinity, nextAt: Infinity };
       },
       onDaily: () => this.toggleDaily(),
@@ -123,9 +137,11 @@ export class GameSystem extends createSystem({
       onSound: () => this.toggleSound(),
       onMenu: () => this.menu.toggle(),
     });
+    this.album = new Album(this.world);
     this.menu = new PalmMenu(this.world, [
-      { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
+      { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera) },
       { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
+      { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
       { icon: 'sound', label: 'Sound', run: () => this.toggleSound() },
       { icon: 'recenter', label: 'Move mat', run: () => this.place(true) },
       { icon: 'close', label: 'Close', run: () => {} },
@@ -171,6 +187,9 @@ export class GameSystem extends createSystem({
             })(),
           })),
         menu: () => this.menu,
+        album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera),
+        hands: () => this.hands,
+        occluders: () => this.occluders.root.children.length,
         gallery: () => {
           const kinds = ['crane', 'frog', 'fox', 'fish', 'butterfly', 'boat', 'rabbit', 'whale'] as const;
           kinds.forEach((k, i) => {
@@ -192,6 +211,7 @@ export class GameSystem extends createSystem({
       startMusic();
       this.sessionTime = 0;
       this.titleShown = false;
+      this.occluderKey = '';
       this.scanHinted = false;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
@@ -310,6 +330,19 @@ export class GameSystem extends createSystem({
     const sub = done ? `Solved today · ${n}-day streak` : n > 0 ? `${n}-day streak` : 'A new fold every day';
     this.game.loadDaily(dailyLevel(today), sub);
     this.game.button('daily')?.setIcon('back');
+  }
+
+  /** Rebuilds the depth-only room when the scan gains or loses pieces. */
+  private refreshOccluders() {
+    const on = this.mode === 'ar';
+    this.occluders.setEnabled(on);
+    if (!on) return;
+    const planes = this.planeInfos();
+    const meshes = this.meshInfos();
+    const key = `${planes.length}:${meshes.length}`;
+    if (key === this.occluderKey) return;
+    this.occluderKey = key;
+    this.occluders.update(planes, meshes);
   }
 
   private toggleSound() {
@@ -443,7 +476,15 @@ export class GameSystem extends createSystem({
       this.title.play();
     }
     this.title.update(delta);
+    this.hands.update(delta);
+    this.occluderCheck -= delta;
+    if (this.occluderCheck <= 0) {
+      this.occluderCheck = 1;
+      this.refreshOccluders();
+    }
+    this.zoo.watch = this.game.busy ? this.game.boardRoot.getWorldPosition(this.watchPoint) : null;
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
+    this.album.update(delta);
     this.world.camera.getWorldPosition(this.ear);
     this.world.camera.getWorldDirection(this.earFwd);
     setListener(this.ear, this.earFwd);
