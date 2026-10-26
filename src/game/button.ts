@@ -29,7 +29,8 @@ export type IconKind =
   | 'menu'
   | 'close'
   | 'album'
-  | 'settings';
+  | 'settings'
+  | 'levels';
 
 const RADIUS = 0.026;
 
@@ -171,6 +172,14 @@ function drawIcon(kind: IconKind): CanvasTexture {
       g.quadraticCurveTo(156, 78, 128, 92);
       g.lineTo(128, 178);
       g.stroke();
+      break;
+    case 'levels':
+      // A grid of four tiles.
+      for (const [x, y] of [[84, 84], [136, 84], [84, 136], [136, 136]]) {
+        g.beginPath();
+        g.roundRect(x, y, 38, 38, 6);
+        g.fill();
+      }
       break;
     case 'settings':
       for (let i = 0; i < 8; i++) {

@@ -18,10 +18,12 @@ import {
 import { paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
-import { dailyLevel, dayNumber, Level, LEVELS, LOOKS } from './levels.js';
+import { dailyLevel, dayNumber, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Album } from './album.js';
 import { Hands } from './hands.js';
+import { ResultAction, ResultCard } from './result-card.js';
+import { Best, mergeBest, Result } from './score.js';
 import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
@@ -47,6 +49,10 @@ const PROGRESS_KEY = 'foldlings.progress.v1';
 interface Progress {
   level: number;
   solved: string[];
+  /** Best stars and fewest folds per level id. */
+  best?: Record<string, Best>;
+  /** 2 since the eighty-level campaign. */
+  version?: number;
   /** Day numbers on which the daily fold was solved. */
   daily?: number[];
   muted?: boolean;
@@ -59,7 +65,7 @@ export class GameSystem extends createSystem({
   game!: FoldGame;
   private room!: RoomFrame;
   private zoo!: Menagerie;
-  private progress: Progress = { level: 0, solved: [] };
+  private progress: Progress = { level: 0, solved: [], best: {}, version: 2 };
   private sessionTime = -1;
   private desktopTime = 0;
   private surfaceClock = 0;
@@ -78,7 +84,11 @@ export class GameSystem extends createSystem({
     where: string;
     sayAt: number;
     nextAt: number;
+    result: Result;
   } | null = null;
+  private resultCard!: ResultCard;
+  /** The level the result card is about, for Retry. */
+  private lastLevel: Level | null = null;
   private ear = new Vector3();
   private menu!: PalmMenu;
   private album!: Album;
@@ -111,7 +121,7 @@ export class GameSystem extends createSystem({
 
     try {
       const p = JSON.parse(safeGet(PROGRESS_KEY) ?? 'null') as Progress | null;
-      if (p && typeof p.level === 'number') this.progress = p;
+      if (p && typeof p.level === 'number') this.progress = migrate(p);
     } catch {
       /* fresh start */
     }
@@ -126,9 +136,9 @@ export class GameSystem extends createSystem({
     this.zoo.hands = this.hands;
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
-      onSolved: (level) => {
+      onSolved: (level, _paper, _root, result) => {
         this.zoo.cheer();
-        this.celebrate = { t: 0, level, revealed: false, vanished: false, where: '', sayAt: Infinity, nextAt: Infinity };
+        this.celebrate = { t: 0, level, revealed: false, vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
       },
       onDaily: () => this.toggleDaily(),
       footer: () => {
@@ -141,6 +151,7 @@ export class GameSystem extends createSystem({
       onMenu: () => this.menu.toggle(),
     });
     this.album = new Album(this.world);
+    this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
     this.settingsPanel = new SettingsPanel(this.world, this.settings, (state) => {
       this.applySettings(state);
       saveSettings(state);
@@ -179,7 +190,7 @@ export class GameSystem extends createSystem({
         placement: () => this.placed && { label: this.placed.label, onSurface: this.placed.onSurface, p: this.placed.position.toArray().map((v) => +v.toFixed(2)) },
         resetAll: () => {
           this.zoo.reset();
-          this.progress = { level: 0, solved: [], daily: [], muted: false };
+          this.progress = { level: 0, solved: [], daily: [], muted: false, best: {}, version: 2 };
           this.saveProgress();
           this.game.loadLevel(0);
         },
@@ -422,6 +433,8 @@ export class GameSystem extends createSystem({
       } else {
         if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
         this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
+        this.progress.best ??= {};
+        this.progress.best[c.level.id] = mergeBest(this.progress.best[c.level.id], c.result);
       }
       this.saveProgress();
     }
@@ -440,13 +453,26 @@ export class GameSystem extends createSystem({
     }
     if (c.t > c.nextAt) {
       this.celebrate = null;
+      this.lastLevel = c.level;
+      const sub = c.level.world < 0 ? 'Daily Fold' : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
+      this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id]);
+    }
+  }
+
+  /** What the result card asked for: the next level, another try, or the level list. */
+  private afterResult(action: ResultAction) {
+    const last = this.lastLevel;
+    if (action === 'retry' && last) {
+      if (last.world < 0) this.game.loadDaily(last, 'Daily Fold');
+      else this.game.loadLevel(LEVELS.indexOf(last));
+    } else {
       this.game.loadLevel(this.progress.level);
       this.game.button('daily')?.setIcon('daily');
-      this.game.hidePaper(false);
-      // Nudge towards today's fold once the basics are learned.
-      const doneToday = (this.progress.daily ?? []).includes(dayNumber());
-      if (!doneToday && this.progress.solved.length >= 3) this.game.button('daily')?.pulse(4);
     }
+    this.game.hidePaper(false);
+    // Nudge towards today's fold once the basics are learned.
+    const doneToday = (this.progress.daily ?? []).includes(dayNumber());
+    if (!doneToday && this.progress.solved.length >= 3) this.game.button('daily')?.pulse(4);
   }
 
   update(delta: number, time: number): void {
@@ -520,6 +546,7 @@ export class GameSystem extends createSystem({
     this.menu.blocked = this.game.busy;
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.album.update(delta);
+    this.resultCard.update(delta);
     this.settingsPanel.update(delta);
     this.world.camera.getWorldPosition(this.ear);
     Creature.viewer.copy(this.ear);
@@ -531,4 +558,16 @@ export class GameSystem extends createSystem({
     this.fitDesk();
     for (const c of this.galleryItems) c.update(delta);
   }
+}
+
+/** The twelve-level order before the campaign, for old saves. */
+const OLD_ORDER = ['crane', 'frog', 'boat', 'fish', 'fox', 'butterfly', 'rabbit', 'whale', 'crane-2', 'frog-2', 'fox-2', 'whale-2'];
+
+/** Brings an old save into the campaign: same next level, one star per solve. */
+export function migrate(p: Progress): Progress {
+  if (p.version === 2) return p;
+  const next = LEVELS.findIndex((l) => l.id === OLD_ORDER[p.level]);
+  const best: Record<string, Best> = {};
+  for (const id of p.solved ?? []) best[id] = { stars: 1, folds: 99 };
+  return { ...p, level: Math.max(0, next), best, version: 2 };
 }

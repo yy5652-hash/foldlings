@@ -44,6 +44,7 @@ import {
 import { BoardView } from './board-view.js';
 import { Button, IconKind } from './button.js';
 import { Guide } from './guide.js';
+import { Result, scoreSolve } from './score.js';
 import { HandGrace, HandsMissing } from './hand-grace.js';
 import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
@@ -78,7 +79,7 @@ const NEAR_HEIGHT = 0.09;
 const NEAR_MARGIN = 0.025;
 
 export interface FoldGameEvents {
-  onSolved?: (level: Level, paper: PaperState, boardRoot: Group) => void;
+  onSolved?: (level: Level, paper: PaperState, boardRoot: Group, result: Result) => void;
   onRecenter?: () => void;
   onDaily?: () => void;
   onSound?: () => void;
@@ -121,6 +122,8 @@ export class FoldGame {
   private message = '';
   private messageTimer = 0;
   private folds = 0;
+  /** A hint was asked for on this attempt (costs the perfect star). */
+  private hinted = false;
 
   private drag: Drag | null = null;
   private handGrace = new HandGrace();
@@ -337,13 +340,14 @@ export class FoldGame {
     this.handGrace.reset();
     this.settle = null;
     this.folds = 0;
+    this.hinted = false;
     this.idle = 0;
     this.guide.hide();
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
     this.board.setGhostOpacity(0.55);
-    this.board.setFoldCount(0, this.level.solution.length);
+    this.board.setFoldCount(0, this.level.par);
     this.clearHints();
   }
 
@@ -363,12 +367,13 @@ export class FoldGame {
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.solved = false;
-    this.board.setFoldCount(this.folds, this.level.solution.length);
+    this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
   }
 
   /** Each press gives a little more: the corner, then the crease, then a demonstration. */
   hint() {
+    this.hinted = true;
     const next = this.nextFold();
     const pts = next ? this.nextFoldPoints() : null;
     if (next && pts) {
@@ -864,7 +869,7 @@ export class FoldGame {
     this.folds++;
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
-    this.board.setFoldCount(this.folds, this.level.solution.length);
+    this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
     sfx.fold();
     if (rasterMatch(rasterize(this.paper), this.target) >= 0.999) {
@@ -873,7 +878,7 @@ export class FoldGame {
       this.board.setGhostOpacity(0);
       this.board.setOutlineVisible(false);
       sfx.solved();
-      this.events.onSolved?.(this.level, this.paper, this.boardRoot);
+      this.events.onSolved?.(this.level, this.paper, this.boardRoot, scoreSolve(this.folds, this.level.par, this.hinted));
     }
   }
 

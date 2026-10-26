@@ -236,6 +236,15 @@ export const sfx = {
     rustle(0.09, 3400, 1.4, 0.22);
     tone(BEAT_NOTES[Math.min(i, BEAT_NOTES.length - 1)], 0.5, 0.07, 0.02);
   },
+  /** One star landing on the result card (0, 1, 2 rise in pitch). */
+  star(i: number) {
+    bell([783.99, 987.77, 1174.66][Math.min(2, i)], 0.09);
+    rustle(0.12, 4200, 1.2, 0.08);
+  },
+  /** All three stars: a short fanfare. */
+  perfect() {
+    [1046.5, 1318.5, 1568, 2093].forEach((f, i) => bell(f, 0.07, 0.08 + i * 0.07));
+  },
   /** A rising shimmer as the creature finishes and wakes up. */
   awaken() {
     [1046.5, 1318.5, 1568, 2093].forEach((f, i) => bell(f, 0.05, i * 0.05));
