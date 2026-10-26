@@ -1,0 +1,17 @@
+{
+  "name": "Foldlings",
+  "short_name": "Foldlings",
+  "description": "Fold paper with your bare hands; every puzzle you solve becomes an origami creature that moves into your room.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#2f4a45",
+  "theme_color": "#2f4a45",
+  "categories": ["games", "puzzle", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "icons/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
