@@ -35,6 +35,7 @@ const AUTO_CLOSE = 40;
 
 interface Tile {
   hit: Mesh;
+  entity: Entity;
   /** Canvas rectangle. */
   x: number;
   y: number;
@@ -136,9 +137,11 @@ export class LevelSelect {
   }
 
   private clearTiles() {
+    // Dispose the entities too: a merely detached one is put back in the
+    // scene by its transform and would keep catching rays and pokes.
     for (const t of this.tiles) {
       this.tileRoot.remove(t.hit.parent!);
-      t.hit.geometry.dispose();
+      t.entity.dispose();
     }
     this.tiles = [];
     for (const m of [...this.minis.children]) {
@@ -179,7 +182,7 @@ export class LevelSelect {
     });
     target.addEventListener('pointerenter', () => this.setHover(index));
     target.addEventListener('pointerleave', () => this.hover === index && this.setHover(-1));
-    this.tiles.push({ hit, x, y, w, h, run });
+    this.tiles.push({ hit, entity: e, x, y, w, h, run });
   }
 
   private setHover(i: number) {

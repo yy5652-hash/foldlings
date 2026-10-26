@@ -35,7 +35,13 @@ export default async function ({ page, frame, cdp, signal }) {
         return { x: p[0] + (v.dx ?? 0), y: p[1] + (v.dy ?? 0), z: p[2] + (v.dz ?? 0) };
       }
       if (typeof v.$bookTile === 'number') {
-        const p = await frame.evaluate((i) => window.__foldlings.book().tiles[i].hit.getWorldPosition(new (window.__foldlings.world.camera.position.constructor)()).toArray(), v.$bookTile);
+        // `out` metres along the page's facing direction (towards the player).
+        const p = await frame.evaluate(([i, out]) => {
+          const hit = window.__foldlings.book().tiles[i].hit;
+          const V = window.__foldlings.world.camera.position.constructor;
+          const n = new V(0, 0, 1).transformDirection(hit.matrixWorld);
+          return hit.getWorldPosition(new V()).addScaledVector(n, out).toArray();
+        }, [v.$bookTile, v.out ?? 0]);
         return { x: p[0], y: p[1], z: p[2] };
       }
       if (typeof v.$head === 'object') {
@@ -165,6 +171,10 @@ export default async function ({ page, frame, cdp, signal }) {
     }
     const t = await resolve(opt.target);
     let from = opt.from ?? [0.08, 0.03, 0.08];
+    if (opt.fromPoint) {
+      const f = await resolve(opt.fromPoint);
+      from = [f.x - t.x, f.y - t.y, f.z - t.z];
+    }
     if (opt.fromHead) {
       // Come in from the player's side, `fromHead` metres out.
       const h = await resolve({ $head: [0, -0.05, 0] });
