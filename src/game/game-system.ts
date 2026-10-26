@@ -8,6 +8,7 @@ import {
   Color,
   createSystem,
   DirectionalLight,
+  Euler,
   Group,
   HemisphereLight,
   Vector3,
@@ -46,6 +47,14 @@ import { makeDesk, VirtualRoom } from './virtual-room.js';
 /** Where the mat rests in the flat browser view. */
 const DESKTOP_POSITION = new Vector3(0, 0.74, -0.42);
 const PROGRESS_KEY = 'foldlings.progress.v1';
+/** Where the mat stood last time, in the room frame (passthrough only). */
+const MAT_KEY = 'foldlings.mat.v1';
+
+interface SavedMat {
+  p: [number, number, number];
+  yaw: number;
+  onSurface: boolean;
+}
 
 interface Progress {
   level: number;
@@ -71,6 +80,9 @@ export class GameSystem extends createSystem({
   private desktopTime = 0;
   private surfaceClock = 0;
   private placed: Placement | null = null;
+  /** The current mat spot has been saved against the room anchor. */
+  private matSaved = false;
+  private euler = new Euler(0, 0, 0, 'YXZ');
   private moveFrom = new Vector3();
   private moveTo = new Vector3();
   private yawFrom = 0;
@@ -231,6 +243,7 @@ export class GameSystem extends createSystem({
             })(),
           })),
         menu: () => this.menu,
+        room: () => this.room,
         levels: (w = -1) => this.openLevels(w),
         book: () => this.levelSelect,
         skipTitle: () => {
@@ -347,6 +360,7 @@ export class GameSystem extends createSystem({
     this.yawTo = next.yaw;
     this.moveT = 0;
     this.placed = next;
+    this.matSaved = false;
     // Show what the headset sees of the room while the mat finds its spot.
     if (this.mode === 'ar' && (force || this.sessionTime - this.lastScan > 3)) {
       const surfaces = this.roomSurfaces();
@@ -360,6 +374,42 @@ export class GameSystem extends createSystem({
       next.label,
       next.position.toArray().map((v) => v.toFixed(2)).join(', '),
     );
+  }
+
+  private savedMat(): SavedMat | null {
+    try {
+      return JSON.parse(safeGet(MAT_KEY) ?? 'null') as SavedMat | null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Yaw of the room frame about world up. */
+  private roomYaw(): number {
+    return this.euler.setFromQuaternion(this.room.root.quaternion, 'YXZ').y;
+  }
+
+  private saveMat() {
+    this.matSaved = true;
+    const p = this.room.root.worldToLocal(this.game.boardRoot.position.clone());
+    const saved: SavedMat = { p: [p.x, p.y, p.z], yaw: this.yawTo - this.roomYaw(), onSurface: !!this.placed?.onSurface };
+    safeSet(MAT_KEY, JSON.stringify(saved));
+  }
+
+  /** Puts the mat back where it stood last visit. */
+  private restoreMat(m: SavedMat) {
+    const position = this.room.root.localToWorld(new Vector3(...m.p));
+    const root = this.game.boardRoot;
+    this.moveFrom.copy(position).y -= 0.05;
+    this.moveTo.copy(position);
+    this.yawFrom = this.yawTo = m.yaw + this.roomYaw();
+    this.moveT = 0;
+    // A remembered floating mat may still move onto a table found later.
+    this.placed = { position, yaw: this.yawTo, onSurface: m.onSurface, label: 'remembered' };
+    this.matSaved = true;
+    root.position.copy(this.moveFrom);
+    this.game.say('Your mat is right where you left it', 3);
+    console.info('[foldlings] mat restored:', position.toArray().map((v) => v.toFixed(2)).join(', '));
   }
 
   private streak(): number {
@@ -514,9 +564,12 @@ export class GameSystem extends createSystem({
     this.room.update(frame, delta);
     if (this.sessionTime >= 0) {
       this.sessionTime += delta;
-      // First placement once the head pose has settled, then upgrade to a
-      // real table when the room scan arrives.
-      if (!this.placed && this.sessionTime > 0.3) this.place(false);
+      // A mat remembered from last time goes straight back to its spot;
+      // otherwise first placement once the head pose has settled, then
+      // upgrade to a real table when the room scan arrives.
+      const remembered = this.mode === 'ar' ? this.savedMat() : null;
+      if (!this.placed && remembered && this.room.restored && this.room.ready) this.restoreMat(remembered);
+      else if (!this.placed && this.sessionTime > (remembered ? 3 : 0.3)) this.place(false);
       else if (
         this.mode === 'ar' &&
         this.placed &&
@@ -527,6 +580,7 @@ export class GameSystem extends createSystem({
         const table = tablePlacement(this.player.head, this.roomSurfaces());
         if (table) this.place(false);
       }
+      if (this.mode === 'ar' && this.placed && !this.matSaved && this.room.anchored && this.moveT >= 1) this.saveMat();
       this.surfaceClock -= delta;
       if (this.mode === 'ar' && this.surfaceClock <= 0) {
         this.surfaceClock = 1;
