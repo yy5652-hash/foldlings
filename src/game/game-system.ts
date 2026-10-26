@@ -22,6 +22,7 @@ import { dailyLevel, dayNumber, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from '
 import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
 import { Album } from './album.js';
 import { Hands } from './hands.js';
+import { LevelSelect } from './level-select.js';
 import { ResultAction, ResultCard } from './result-card.js';
 import { Best, mergeBest, Result } from './score.js';
 import { Menagerie } from './menagerie.js';
@@ -87,6 +88,7 @@ export class GameSystem extends createSystem({
     result: Result;
   } | null = null;
   private resultCard!: ResultCard;
+  private levelSelect!: LevelSelect;
   /** The level the result card is about, for Retry. */
   private lastLevel: Level | null = null;
   private ear = new Vector3();
@@ -149,14 +151,33 @@ export class GameSystem extends createSystem({
       },
       onSound: () => this.toggleSound(),
       onMenu: () => this.menu.toggle(),
+      onLevels: () => this.openLevels(this.game.level.world),
     });
     this.album = new Album(this.world);
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
+    this.levelSelect = new LevelSelect(this.world, {
+      best: () => this.progress.best ?? {},
+      streak: () => this.streak(),
+      dailyDone: () => (this.progress.daily ?? []).includes(dayNumber()),
+      play: (i) => {
+        this.resultCard.hide();
+        this.progress.level = i;
+        this.saveProgress();
+        this.game.loadLevel(i);
+        this.game.hidePaper(false);
+      },
+      daily: () => {
+        this.resultCard.hide();
+        if (!this.game.isDaily) this.toggleDaily();
+        this.game.hidePaper(false);
+      },
+    });
     this.settingsPanel = new SettingsPanel(this.world, this.settings, (state) => {
       this.applySettings(state);
       saveSettings(state);
     });
     this.menu = new PalmMenu(this.world, [
+      { icon: 'levels', label: 'Levels', run: () => this.openLevels(this.game.level.world) },
       { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera) },
       { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
       { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
@@ -210,6 +231,8 @@ export class GameSystem extends createSystem({
             })(),
           })),
         menu: () => this.menu,
+        levels: (w = -1) => this.openLevels(w),
+        book: () => this.levelSelect,
         skipTitle: () => {
           this.titleShown = true;
           this.title.stop();
@@ -244,6 +267,7 @@ export class GameSystem extends createSystem({
       this.menu.close();
       this.album.hide();
       this.settingsPanel.close();
+      this.levelSelect.hide();
       this.scanHinted = false;
       this.placed = null;
       const blend = this.world.renderer.xr.getSession()?.environmentBlendMode;
@@ -459,6 +483,13 @@ export class GameSystem extends createSystem({
     }
   }
 
+  /** The level book, open on `world` when it is unlocked. */
+  private openLevels(world: number) {
+    this.menu.close();
+    this.album.hide();
+    this.levelSelect.show(this.world.camera, world);
+  }
+
   /** What the result card asked for: the next level, another try, or the level list. */
   private afterResult(action: ResultAction) {
     const last = this.lastLevel;
@@ -470,6 +501,7 @@ export class GameSystem extends createSystem({
       this.game.button('daily')?.setIcon('daily');
     }
     this.game.hidePaper(false);
+    if (action === 'levels') this.openLevels(this.game.level.world);
     // Nudge towards today's fold once the basics are learned.
     const doneToday = (this.progress.daily ?? []).includes(dayNumber());
     if (!doneToday && this.progress.solved.length >= 3) this.game.button('daily')?.pulse(4);
@@ -547,6 +579,7 @@ export class GameSystem extends createSystem({
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.album.update(delta);
     this.resultCard.update(delta);
+    this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
     this.world.camera.getWorldPosition(this.ear);
     Creature.viewer.copy(this.ear);

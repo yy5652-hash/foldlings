@@ -84,6 +84,7 @@ export interface FoldGameEvents {
   onDaily?: () => void;
   onSound?: () => void;
   onMenu?: () => void;
+  onLevels?: () => void;
   /** Small collection line for the goal card ("Zoo 7 · 3-day streak"). */
   footer?: () => string;
 }
@@ -169,7 +170,7 @@ export class FoldGame {
     this.addButton('undo', 0.295, -0.12, () => this.undo(), 'Undo');
     this.addButton('hint', 0.295, -0.01, () => this.hint(), 'Hint');
     this.addButton('menu', -0.295, -0.12, () => this.events.onMenu?.(), 'Menu');
-    this.addButton('daily', -0.295, -0.01, () => this.events.onDaily?.(), 'Daily');
+    this.addButton('levels', -0.295, -0.01, () => this.events.onLevels?.(), 'Levels');
 
     const ring = new RingGeometry(0.008, 0.011, 32);
     ring.rotateX(-Math.PI / 2);

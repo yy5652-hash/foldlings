@@ -34,6 +34,10 @@ export default async function ({ page, frame, cdp, signal }) {
         if (!p) throw new Error(`no object ${v.$object}`);
         return { x: p[0] + (v.dx ?? 0), y: p[1] + (v.dy ?? 0), z: p[2] + (v.dz ?? 0) };
       }
+      if (typeof v.$bookTile === 'number') {
+        const p = await frame.evaluate((i) => window.__foldlings.book().tiles[i].hit.getWorldPosition(new (window.__foldlings.world.camera.position.constructor)()).toArray(), v.$bookTile);
+        return { x: p[0], y: p[1], z: p[2] };
+      }
       if (typeof v.$head === 'object') {
         const h = await frame.evaluate(() => window.__foldlings.world.camera.getWorldPosition(new (window.__foldlings.world.camera.position.constructor)()).toArray());
         return { x: h[0] + v.$head[0], y: h[1] + v.$head[1], z: h[2] + v.$head[2] };

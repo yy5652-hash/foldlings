@@ -64,9 +64,9 @@ const eyeMat = new MeshBasicMaterial({ vertexColors: true });
 
 /** One unit eye: a flattened ink dot with its white glint, in one draw call. */
 function eyeGeometry(): BufferGeometry {
-  const ball = new IcosahedronGeometry(1, 2).toNonIndexed();
+  const ball = new IcosahedronGeometry(1, 2);
   ball.scale(1, 1, 0.45);
-  const glint = new IcosahedronGeometry(1, 1).toNonIndexed();
+  const glint = new IcosahedronGeometry(1, 1);
   glint.scale(0.3, 0.3, 0.3);
   glint.translate(0.32, 0.36, 0.36);
   const pos: number[] = [];
