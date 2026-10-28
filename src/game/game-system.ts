@@ -33,7 +33,7 @@ import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
 import { TitleCard } from './title.js';
-import { loadSettings, saveSettings, SettingsPanel, SettingsState } from './settings.js';
+import { loadSettings, MAT_STEP, saveSettings, SettingsPanel, SettingsState } from './settings.js';
 import { floatingPlacement, Placement, tablePlacement } from './placement.js';
 import {
   MeshInfo,
@@ -434,7 +434,8 @@ export class GameSystem extends createSystem({
 
   private saveMat() {
     this.matSaved = true;
-    const p = this.room.root.worldToLocal(this.game.boardRoot.position.clone());
+    // The spot before the comfort nudge, which is applied on top each visit.
+    const p = this.room.root.worldToLocal(this.moveTo.clone());
     const saved: SavedMat = { p: [p.x, p.y, p.z], yaw: this.yawTo - this.roomYaw(), onSurface: !!this.placed?.onSurface };
     safeSet(MAT_KEY, JSON.stringify(saved));
   }
@@ -750,12 +751,19 @@ export class GameSystem extends createSystem({
       this.desktopTime += delta;
       if (this.desktopTime > 0.5) this.zoo.restore(this.boardWorld(), false);
     }
-    if (this.moveT < 1) {
+    if (this.moveT < 1 || this.placed) {
       this.moveT = Math.min(1, this.moveT + delta / 0.6);
       const e = 1 - Math.pow(1 - this.moveT, 3);
       const root = this.game.boardRoot;
       root.position.lerpVectors(this.moveFrom, this.moveTo, e);
       root.quaternion.setFromAxisAngle(this.up, this.yawFrom + (this.yawTo - this.yawFrom) * e);
+      // Comfort nudge from the settings: up or down, nearer or farther.
+      if (this.placed) {
+        const d = this.settings.matDistance * MAT_STEP.matDistance * 0.01;
+        root.position.x -= Math.sin(this.yawTo) * d;
+        root.position.z -= Math.cos(this.yawTo) * d;
+        root.position.y += this.settings.matHeight * MAT_STEP.matHeight * 0.01;
+      }
     }
     if (this.celebrate) this.updateCelebration(delta);
     // The title unfolds once the mat has settled after the room scan.

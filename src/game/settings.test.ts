@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSettings, saveSettings } from './settings.js';
 
 const KEY = 'foldlings.settings.v1';
-const DEFAULTS = { easyFolds: false, leftHanded: false, reduceMotion: false, highContrast: false };
+const DEFAULTS = { easyFolds: false, leftHanded: false, reduceMotion: false, highContrast: false, matHeight: 0, matDistance: 0 };
 
 describe('settings persistence', () => {
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe('settings persistence', () => {
   });
 
   it('round-trips all settings using the versioned key', () => {
-    const state = { easyFolds: true, leftHanded: true, reduceMotion: true, highContrast: true };
+    const state = { easyFolds: true, leftHanded: true, reduceMotion: true, highContrast: true, matHeight: 2, matDistance: -1 };
     saveSettings(state);
     expect(localStorage.setItem).toHaveBeenCalledWith(KEY, JSON.stringify(state));
     expect(loadSettings()).toEqual(state);
@@ -47,5 +47,12 @@ describe('settings persistence', () => {
     });
     expect(loadSettings()).toEqual(DEFAULTS);
     expect(() => saveSettings(DEFAULTS)).not.toThrow();
+  });
+
+  it('keeps mat nudges whole and within three steps', () => {
+    localStorage.setItem(KEY, JSON.stringify({ matHeight: 7.6, matDistance: -2.4 }));
+    expect(loadSettings()).toMatchObject({ matHeight: 3, matDistance: -2 });
+    localStorage.setItem(KEY, JSON.stringify({ matHeight: 'up', matDistance: null }));
+    expect(loadSettings()).toMatchObject({ matHeight: 0, matDistance: 0 });
   });
 });

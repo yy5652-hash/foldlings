@@ -19,7 +19,15 @@ export interface SettingsState {
   leftHanded: boolean;
   reduceMotion: boolean;
   highContrast: boolean;
+  /** Comfort nudges for the mat, in steps (-3..3): 3 cm up, 4 cm away. */
+  matHeight: number;
+  matDistance: number;
 }
+
+/** Centimetres per step of the mat nudges. */
+export const MAT_STEP = { matHeight: 3, matDistance: 4 } as const;
+
+const step = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-3, Math.min(3, Math.round(v))) : 0);
 
 const SETTINGS_KEY = 'foldlings.settings.v1';
 
@@ -35,6 +43,8 @@ export function loadSettings(): SettingsState {
     leftHanded: saved?.leftHanded === true,
     reduceMotion: saved?.reduceMotion === true,
     highContrast: saved?.highContrast === true,
+    matHeight: step(saved?.matHeight),
+    matDistance: step(saved?.matDistance),
   };
 }
 
@@ -42,7 +52,7 @@ export function saveSettings(state: SettingsState) {
   safeSet(SETTINGS_KEY, JSON.stringify(state));
 }
 
-const ROWS: { key: keyof SettingsState; label: string; icon: IconKind }[] = [
+const ROWS: { key: 'easyFolds' | 'leftHanded' | 'reduceMotion' | 'highContrast'; label: string; icon: IconKind }[] = [
   { key: 'easyFolds', label: 'Easy folds', icon: 'hint' },
   { key: 'leftHanded', label: 'Left handed', icon: 'back' },
   { key: 'reduceMotion', label: 'Reduce motion', icon: 'restart' },
@@ -70,7 +80,7 @@ export class SettingsPanel {
     this.panel.name = 'SettingsPanel';
     const c = document.createElement('canvas');
     c.width = 512;
-    c.height = 688;
+    c.height = 960;
     const g = c.getContext('2d')!;
     g.fillStyle = 'rgba(30,46,42,0.94)';
     g.beginPath();
@@ -81,7 +91,7 @@ export class SettingsPanel {
     g.stroke();
     const t = new CanvasTexture(c);
     t.colorSpace = SRGBColorSpace;
-    const page = new Mesh(new PlaneGeometry(0.32, 0.43), new MeshBasicMaterial({ map: t, transparent: true }));
+    const page = new Mesh(new PlaneGeometry(0.32, 0.6), new MeshBasicMaterial({ map: t, transparent: true }));
     page.renderOrder = -5;
     this.panel.add(page);
     const pe = world.createTransformEntity(this.panel);
@@ -95,9 +105,39 @@ export class SettingsPanel {
         this.onChange({ ...this.state });
       }, `${row.label}: ${this.state[row.key] ? 'On' : 'Off'}`);
       b.root.name = `Settings_${row.key}`;
-      b.root.position.set(-0.105, 0.13 - i * 0.09, 0.004);
+      b.root.position.set(-0.105, 0.21 - i * 0.085, 0.004);
       b.setLabelBeside(1.7);
       this.buttons.push(b);
+    });
+    // Two steppers for where the mat sits: lower/higher, nearer/farther.
+    const steps: { key: 'matHeight' | 'matDistance'; label: string }[] = [
+      { key: 'matHeight', label: 'Mat height' },
+      { key: 'matDistance', label: 'Mat distance' },
+    ];
+    steps.forEach((row, j) => {
+      const y = 0.21 - (ROWS.length + j) * 0.085;
+      const text = () => {
+        const cm = this.state[row.key] * MAT_STEP[row.key];
+        return `${row.label}: ${cm > 0 ? '+' : ''}${cm} cm`;
+      };
+      const plus = new Button('plus', () => nudge(1), text());
+      const minus = new Button('minus', () => nudge(-1));
+      const nudge = (d: number) => {
+        if (!this.wantOpen || this.unfold < 0.9) return;
+        this.state[row.key] = Math.max(-3, Math.min(3, this.state[row.key] + d));
+        plus.setLabel(text());
+        this.idle = 0;
+        sfx.click();
+        this.onChange({ ...this.state });
+      };
+      minus.root.name = `Settings_${row.key}_minus`;
+      plus.root.name = `Settings_${row.key}_plus`;
+      minus.root.position.set(-0.118, y, 0.004);
+      plus.root.position.set(-0.058, y, 0.004);
+      minus.root.scale.setScalar(0.8);
+      plus.root.scale.setScalar(0.8);
+      plus.setLabelBeside(1.6);
+      this.buttons.push(minus, plus);
     });
     const close = new Button('close', () => {
       if (!this.wantOpen || this.unfold < 0.9) return;
@@ -105,7 +145,7 @@ export class SettingsPanel {
       this.close();
     });
     close.root.name = 'Settings_close';
-    close.root.position.set(0.128, 0.18, 0.004);
+    close.root.position.set(0.128, 0.265, 0.004);
     close.root.scale.setScalar(0.7);
     this.buttons.push(close);
     for (const b of this.buttons) {

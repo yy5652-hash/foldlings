@@ -31,7 +31,9 @@ export type IconKind =
   | 'album'
   | 'settings'
   | 'levels'
-  | 'save';
+  | 'save'
+  | 'plus'
+  | 'minus';
 
 const RADIUS = 0.026;
 
@@ -172,6 +174,17 @@ function drawIcon(kind: IconKind): CanvasTexture {
       g.lineTo(186, 86);
       g.quadraticCurveTo(156, 78, 128, 92);
       g.lineTo(128, 178);
+      g.stroke();
+      break;
+    case 'plus':
+    case 'minus':
+      g.beginPath();
+      g.moveTo(82, 128);
+      g.lineTo(174, 128);
+      if (kind === 'plus') {
+        g.moveTo(128, 82);
+        g.lineTo(128, 174);
+      }
       g.stroke();
       break;
     case 'save':
