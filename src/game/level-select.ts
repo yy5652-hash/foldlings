@@ -50,6 +50,10 @@ export interface LevelBookHost {
   dailyDone: () => boolean;
   play: (index: number) => void;
   daily: () => void;
+  /** Saved player puzzles, newest first. */
+  mine: () => { level: Level; code: string }[];
+  free: () => void;
+  playLevel: (level: Level) => void;
 }
 
 export class LevelSelect {
@@ -192,8 +196,74 @@ export class LevelSelect {
   }
 
   private redraw() {
-    if (this.page < 0) this.drawWorlds();
+    if (this.page === -2) this.drawMine();
+    else if (this.page < 0) this.drawWorlds();
     else this.drawWorld(this.page);
+  }
+
+  /** Free fold first, then the player's own puzzles, newest first. */
+  private showMine() {
+    this.page = -2;
+    this.clearTiles();
+    this.hover = -1;
+    this.parkBack(false);
+    const mine = this.host.mine().slice(0, PER_WORLD - 1);
+    this.levelTiles().forEach((t, i) => {
+      if (i === 0) {
+        this.addTile(t.x, t.y, t.w, t.h, () => {
+          this.hide();
+          this.host.free();
+        });
+      } else if (i <= mine.length) {
+        const m = mine[i - 1];
+        this.addTile(t.x, t.y, t.w, t.h, () => {
+          this.hide();
+          this.host.playLevel(m.level);
+        });
+      }
+    });
+    this.drawMine();
+  }
+
+  private drawMine() {
+    const g = this.canvas.getContext('2d')!;
+    const best = this.host.best();
+    const mine = this.host.mine().slice(0, PER_WORLD - 1);
+    const link = `${location.host}${location.pathname}?p=CODE`;
+    this.page0(g, 'My puzzles', mine.length ? `Share a code: ${link}` : 'Fold anything and save it as a puzzle');
+    this.levelTiles().forEach((t, i) => {
+      if (i === 0) {
+        this.card(g, t, 0, false);
+        g.textAlign = 'center';
+        g.fillStyle = '#2f4a45';
+        g.font = '300 110px system-ui, -apple-system, Segoe UI, sans-serif';
+        g.fillText('+', t.x + t.w / 2, t.y + 140);
+        g.font = '700 28px system-ui, -apple-system, Segoe UI, sans-serif';
+        g.fillText('Free fold', t.x + t.w / 2, t.y + 200);
+        g.fillStyle = '#8a7a6a';
+        g.font = '500 20px system-ui, -apple-system, Segoe UI, sans-serif';
+        g.fillText('make a puzzle', t.x + t.w / 2, t.y + 232);
+        return;
+      }
+      const m = mine[i - 1];
+      this.card(g, t, i, !m);
+      if (!m) return;
+      g.fillStyle = '#2f4a45';
+      g.beginPath();
+      g.roundRect(t.x + 15, t.y + 30, 135, 135, 14);
+      g.fill();
+      g.drawImage(this.thumb(m.level), t.x + 15, t.y + 30, 135, 135);
+      const b = best[m.level.id];
+      const st = b?.stars ?? 0;
+      g.textAlign = 'center';
+      g.fillStyle = b ? '#f2a900' : '#cbbfae';
+      g.font = '600 28px system-ui, -apple-system, Segoe UI, sans-serif';
+      g.fillText('★'.repeat(st) + '☆'.repeat(3 - st), t.x + t.w / 2, t.y + 200);
+      g.fillStyle = '#3b3027';
+      g.font = '600 21px ui-monospace, SFMono-Regular, Menlo, monospace';
+      g.fillText(m.code, t.x + t.w / 2, t.y + 238);
+    });
+    this.tex.needsUpdate = true;
   }
 
   private card(g: CanvasRenderingContext2D, t: { x: number; y: number; w: number; h: number }, i: number, dim: boolean) {
@@ -241,11 +311,12 @@ export class LevelSelect {
     this.parkBack(true);
     const best = this.host.best();
     const stars = totalStars(best);
-    // Daily banner first, then the eight worlds.
-    this.addTile(60, 140, 904, 80, () => {
+    // Daily Fold and My puzzles banners first, then the eight worlds.
+    this.addTile(60, 140, 442, 80, () => {
       this.hide();
       this.host.daily();
     });
+    this.addTile(522, 140, 442, 80, () => this.showMine());
     this.worldTiles().forEach((t, w) => {
       const open = worldOpen(w, stars);
       this.addTile(t.x, t.y, t.w, t.h, () => open && this.showWorld(w));
@@ -269,23 +340,22 @@ export class LevelSelect {
     const best = this.host.best();
     const stars = totalStars(best);
     this.page0(g, 'Levels', `★ ${stars} / ${LEVELS.length * 3}`);
-    const banner = { x: 60, y: 140, w: 904, h: 80 };
-    this.card(g, banner, 0, false);
+    this.card(g, { x: 60, y: 140, w: 442, h: 80 }, 0, false);
+    this.card(g, { x: 522, y: 140, w: 442, h: 80 }, 1, false);
     g.textAlign = 'left';
     g.fillStyle = '#2f4a45';
-    g.font = '700 34px system-ui, -apple-system, Segoe UI, sans-serif';
-    g.fillText('Daily Fold', 90, 192);
+    g.font = '700 32px system-ui, -apple-system, Segoe UI, sans-serif';
+    g.fillText('Daily Fold', 84, 178);
+    g.fillText('My puzzles', 546, 178);
     g.fillStyle = '#8a7a6a';
-    g.font = '500 28px system-ui, -apple-system, Segoe UI, sans-serif';
+    g.font = '500 22px system-ui, -apple-system, Segoe UI, sans-serif';
     const k = this.host.streak();
-    g.fillText(
-      (this.host.dailyDone() ? 'Solved today' : 'A new fold every day') + (k > 0 ? `  ·  ${k}-day streak` : ''),
-      290,
-      192,
-    );
+    g.fillText((this.host.dailyDone() ? 'Solved today' : 'A new fold every day') + (k > 0 ? `  ·  ${k}-day streak` : ''), 84, 207);
+    const n = this.host.mine().length;
+    g.fillText(n ? `${n} saved  ·  free fold` : 'Free fold, make your own', 546, 207);
     this.worldTiles().forEach((t, w) => {
       const open = worldOpen(w, stars);
-      this.card(g, t, w + 1, !open);
+      this.card(g, t, w + 2, !open);
       g.textAlign = 'center';
       g.fillStyle = open ? '#3b3027' : '#b3a898';
       g.font = '600 32px system-ui, -apple-system, Segoe UI, sans-serif';

@@ -6,6 +6,7 @@
 import type { FoldSpec } from '../fold/paper.js';
 import { CAMPAIGN } from './campaign.js';
 import { DAILY_FOLDS } from './daily.js';
+import { decodeFolds } from './share.js';
 import type { PaperLook } from './paper-texture.js';
 
 export type CreatureKind =
@@ -123,3 +124,33 @@ export function dailyLevel(day = dayNumber()): Level {
     par: parseFolds(DAILY_FOLDS[i]).length,
   };
 }
+
+/** The blank sheet of Free fold: no goal to match. */
+export const FREE_LEVEL: Level = {
+  id: 'free',
+  name: 'Free fold',
+  creature: 'crane',
+  look: LOOKS[4],
+  solution: [],
+  world: -2,
+  slot: 0,
+  par: 0,
+};
+
+/** A player-made puzzle from its share code; `n` is its place in My puzzles. */
+export function customLevel(code: string, n: number): Level {
+  const folds = decodeFolds(code) ?? [];
+  let h = 0;
+  for (const ch of code) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return {
+    id: `my-${code}`,
+    name: n >= 0 ? `My puzzle ${n + 1}` : 'Shared puzzle',
+    creature: KINDS[h % KINDS.length],
+    look: LOOKS[(h >> 3) % LOOKS.length],
+    solution: folds,
+    world: -3,
+    slot: Math.max(0, n),
+    par: folds.length,
+  };
+}
+

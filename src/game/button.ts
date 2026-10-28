@@ -30,7 +30,8 @@ export type IconKind =
   | 'close'
   | 'album'
   | 'settings'
-  | 'levels';
+  | 'levels'
+  | 'save';
 
 const RADIUS = 0.026;
 
@@ -171,6 +172,14 @@ function drawIcon(kind: IconKind): CanvasTexture {
       g.lineTo(186, 86);
       g.quadraticCurveTo(156, 78, 128, 92);
       g.lineTo(128, 178);
+      g.stroke();
+      break;
+    case 'save':
+      // A tick.
+      g.beginPath();
+      g.moveTo(78, 132);
+      g.lineTo(112, 168);
+      g.lineTo(180, 90);
       g.stroke();
       break;
     case 'levels':

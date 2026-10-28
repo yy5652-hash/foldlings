@@ -5,6 +5,7 @@
 
 import { SessionMode, World } from '@iwsdk/core';
 import { unlockAudio } from '../game/sfx.js';
+import { formatCode } from '../game/share.js';
 
 async function supported(mode: XRSessionMode): Promise<boolean> {
   try {
@@ -34,6 +35,7 @@ export async function setupLanding(world: World) {
     note.textContent = 'Open this page in the Meta Quest browser to play with your hands.';
   }
   mouse.hidden = false;
+  showShare();
 
   ar.addEventListener('click', () => {
     unlockAudio();
@@ -53,3 +55,28 @@ export async function setupLanding(world: World) {
   world.renderer.xr.addEventListener('sessionstart', () => landing.classList.add('hidden'));
   world.renderer.xr.addEventListener('sessionend', () => landing.classList.remove('hidden'));
 }
+
+/** The newest player-made puzzle, with a link a friend can open. */
+function showShare() {
+  const el = document.getElementById('share');
+  if (!el) return;
+  let codes: string[] = [];
+  try {
+    codes = (JSON.parse(localStorage.getItem('foldlings.progress.v1') ?? 'null')?.custom as string[]) ?? [];
+  } catch {
+    return;
+  }
+  const code = codes[codes.length - 1];
+  if (!code) return;
+  const link = `${location.origin}${location.pathname}?p=${code}`;
+  el.textContent = `Your latest puzzle: ${formatCode(code)} `;
+  const copy = document.createElement('button');
+  copy.className = 'ghost';
+  copy.textContent = 'Copy link';
+  copy.addEventListener('click', () => {
+    void navigator.clipboard?.writeText(link).then(() => (copy.textContent = 'Copied'));
+  });
+  el.append(copy);
+  el.hidden = false;
+}
+

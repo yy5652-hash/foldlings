@@ -16,11 +16,11 @@ import {
   XRMesh,
   XRPlane,
 } from '@iwsdk/core';
-import { paperBounds } from '../fold/paper.js';
+import { FoldSpec, paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
-import { dailyLevel, dayNumber, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
-import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
+import { customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
+import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic } from './sfx.js';
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
@@ -28,6 +28,7 @@ import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
 import { ResultAction, ResultCard } from './result-card.js';
 import { Best, mergeBest, Result, totalStars, worldOpen } from './score.js';
+import { decodeFolds, encodeFolds, formatCode } from './share.js';
 import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
@@ -69,6 +70,8 @@ interface Progress {
   worlds?: number[];
   /** Badge ids earned. */
   badges?: string[];
+  /** Player-made puzzles as share codes, oldest first. */
+  custom?: string[];
   counters?: { palm?: number; waves?: number };
   /** Day numbers on which the daily fold was solved. */
   daily?: number[];
@@ -176,6 +179,7 @@ export class GameSystem extends createSystem({
       onSound: () => this.toggleSound(),
       onMenu: () => this.menu.toggle(),
       onLevels: () => this.openLevels(this.game.level.world),
+      onSave: (folds) => this.saveCustom(folds),
     });
     this.album = new Album(this.world);
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
@@ -197,6 +201,20 @@ export class GameSystem extends createSystem({
       daily: () => {
         this.resultCard.hide();
         if (!this.game.isDaily) this.toggleDaily();
+        this.game.hidePaper(false);
+      },
+      mine: () =>
+        [...(this.progress.custom ?? [])]
+          .reverse()
+          .map((code, i, all) => ({ level: customLevel(code, all.length - 1 - i), code: formatCode(code) })),
+      free: () => {
+        this.resultCard.hide();
+        this.game.loadFree(FREE_LEVEL);
+        this.game.hidePaper(false);
+      },
+      playLevel: (level) => {
+        this.resultCard.hide();
+        this.game.loadCustom(level, level.world === -3 ? 'My puzzle' : 'Shared puzzle');
         this.game.hidePaper(false);
       },
     });
@@ -224,6 +242,14 @@ export class GameSystem extends createSystem({
       this.game.button('sound')?.setIcon('mute');
     }
     this.game.loadLevel(this.progress.level);
+    // A shared link (?p=CODE) opens that puzzle straight away and keeps it.
+    const shared = new URLSearchParams(location.search).get('p');
+    const sharedFolds = shared ? decodeFolds(shared) : null;
+    if (shared && sharedFolds) {
+      const code = encodeFolds(sharedFolds);
+      this.addCustom(code);
+      this.game.loadCustom(customLevel(code, -1), `Shared puzzle  ·  ${formatCode(code)}`);
+    }
     this.game.boardRoot.position.copy(DESKTOP_POSITION);
     this.desk = makeDesk();
     this.game.boardRoot.add(this.desk);
@@ -473,6 +499,33 @@ export class GameSystem extends createSystem({
     this.occluders.update(planes, meshes, mat, head);
   }
 
+  /** Free fold's Save: the folds become a puzzle in My puzzles. */
+  private saveCustom(folds: FoldSpec[]) {
+    if (folds.length === 0) {
+      this.game.say('Fold the paper first, then save it', 3);
+      return;
+    }
+    if (folds.length > 6) {
+      this.game.say('Keep it to six folds or fewer to save it', 3.5);
+      return;
+    }
+    const code = encodeFolds(folds);
+    const n = this.addCustom(code);
+    sfx.badge();
+    this.game.say(`Saved as My puzzle ${n}  ·  code ${formatCode(code)}`, 6);
+  }
+
+  /** Adds a puzzle code (once) and returns its number in My puzzles. */
+  private addCustom(code: string): number {
+    this.progress.custom ??= [];
+    if (!this.progress.custom.includes(code)) {
+      this.progress.custom.push(code);
+      if (this.progress.custom.length > 20) this.progress.custom.shift();
+      this.saveProgress();
+    }
+    return this.progress.custom.indexOf(code) + 1;
+  }
+
   private count(what: 'palm' | 'waves') {
     this.progress.counters ??= {};
     this.progress.counters[what] = (this.progress.counters[what] ?? 0) + 1;
@@ -611,7 +664,12 @@ export class GameSystem extends createSystem({
     if (c.t > c.nextAt) {
       this.celebrate = null;
       this.lastLevel = c.level;
-      const sub = c.level.world < 0 ? 'Daily Fold' : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
+      const sub =
+        c.level.world === -1
+          ? 'Daily Fold'
+          : c.level.world < 0
+            ? `My puzzles  ·  ${formatCode(c.level.id.replace(/^my-/, ''))}`
+            : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
       this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id], c.banner ?? '');
       if (c.worldDone !== undefined && c.worldDone >= 0 && !this.settings.reduceMotion) {
         this.zoo.parade(WORLDS[c.worldDone].kind, c.level.look.front);
@@ -630,7 +688,8 @@ export class GameSystem extends createSystem({
   private afterResult(action: ResultAction) {
     const last = this.lastLevel;
     if (action === 'retry' && last) {
-      if (last.world < 0) this.game.loadDaily(last, 'Daily Fold');
+      if (last.world === -1) this.game.loadDaily(last, 'Daily Fold');
+      else if (last.world < 0) this.game.loadCustom(last, 'My puzzle');
       else this.game.loadLevel(LEVELS.indexOf(last));
     } else {
       this.game.loadLevel(this.progress.level);

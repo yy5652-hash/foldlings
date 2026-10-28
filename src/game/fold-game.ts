@@ -87,6 +87,8 @@ export interface FoldGameEvents {
   onSound?: () => void;
   onMenu?: () => void;
   onLevels?: () => void;
+  /** Free fold's Save token: the folds made so far. */
+  onSave?: (folds: FoldSpec[]) => void;
   /** Small collection line for the goal card ("Zoo 7 · 3-day streak"). */
   footer?: () => string;
 }
@@ -116,6 +118,10 @@ export class FoldGame {
   solved = false;
   inputLocked = false;
   isDaily = false;
+  /** Free fold: no goal; the hint token saves the folds as a puzzle. */
+  isFree = false;
+  /** The folds made on this sheet, in order (undo removes the last). */
+  private played: FoldSpec[] = [];
   readonly guide = new Guide();
   readonly xray = new Xray();
   private idle = 0;
@@ -243,12 +249,44 @@ export class FoldGame {
   loadLevel(index: number) {
     this.levelIndex = ((index % LEVELS.length) + LEVELS.length) % LEVELS.length;
     this.isDaily = false;
+    this.setFree(false);
     this.setLevel(LEVELS[this.levelIndex], `${this.levelIndex + 1} / ${LEVELS.length}`, this.levelIndex + 3);
   }
 
   loadDaily(level: Level, subtitle: string) {
     this.isDaily = true;
+    this.setFree(false);
     this.setLevel(level, subtitle, level.id.length * 17);
+  }
+
+  /** A player-made or shared puzzle, scored like any level. */
+  loadCustom(level: Level, subtitle: string) {
+    this.isDaily = false;
+    this.levelIndex = -1;
+    this.setFree(false);
+    this.setLevel(level, subtitle, level.id.length * 13);
+  }
+
+  /** A blank sheet with no goal: fold anything, then save it as a puzzle. */
+  loadFree(level: Level) {
+    this.isDaily = false;
+    this.levelIndex = -1;
+    this.setFree(true);
+    this.setLevel(level, 'Fold anything, then tap Save', 7);
+    this.board.setGhostOpacity(0);
+    this.board.setOutlineVisible(false);
+  }
+
+  private setFree(on: boolean) {
+    this.isFree = on;
+    const b = this.button('hint');
+    b?.setIcon(on ? 'save' : 'hint');
+    b?.setLabel(on ? 'Save' : 'Hint');
+  }
+
+  /** The folds made on the current sheet. */
+  get playedFolds(): FoldSpec[] {
+    return [...this.played];
   }
 
   private setLevel(level: Level, subtitle: string, seed: number) {
@@ -274,7 +312,7 @@ export class FoldGame {
 
   /** Teaching levels show the ghost fold on their own. */
   private get tutorial(): boolean {
-    return !this.isDaily && this.levelIndex < 2;
+    return !this.isDaily && !this.isFree && this.levelIndex >= 0 && this.levelIndex < 2;
   }
 
   private captionFor(): string {
@@ -352,7 +390,8 @@ export class FoldGame {
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
-    this.board.setGhostOpacity(0.55);
+    this.board.setGhostOpacity(this.isFree ? 0 : 0.55);
+    this.played = [];
     this.board.setFoldCount(0, this.level.par);
     this.clearHints();
   }
@@ -365,6 +404,7 @@ export class FoldGame {
 
   undo() {
     const prev = this.history.pop();
+    if (prev) this.played.pop();
     if (!prev) return;
     sfx.undo();
     this.paper = prev;
@@ -379,6 +419,10 @@ export class FoldGame {
 
   /** Each press gives a little more: the corner, then the crease, then a demonstration. */
   hint() {
+    if (this.isFree) {
+      this.events.onSave?.(this.playedFolds);
+      return;
+    }
     this.hinted = true;
     const next = this.nextFold();
     const pts = next ? this.nextFoldPoints() : null;
@@ -817,7 +861,7 @@ export class FoldGame {
         const parts = splitPaper(this.paper, snap.line, snap.s)!;
         this.paperView.setSplit(parts.stay, parts.move, snap.line, snap.s);
         const result = foldPaper(this.paper, snap.line, snap.s);
-        const solves = !!result && bestMatch(rasterize(result), this.targets) >= 0.999;
+        const solves = !this.isFree && !!result && bestMatch(rasterize(result), this.targets) >= 0.999;
         if (solves && !d.solves) sfx.warm();
         else sfx.snap();
         d.solves = solves;
@@ -871,6 +915,7 @@ export class FoldGame {
       }
     }
     this.history.push(this.paper);
+    this.played.push({ f: snap.f, k: snap.k, s: snap.s });
     this.paper = next;
     this.folds++;
     this.textures.redraw(this.creases);
@@ -878,7 +923,7 @@ export class FoldGame {
     this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
     sfx.fold();
-    const match = bestMatch(rasterize(this.paper), this.targets);
+    const match = this.isFree ? 0 : bestMatch(rasterize(this.paper), this.targets);
     if (match < 0.999 && match >= 0.85 && this.folds >= this.level.par + 1) {
       // Honest about a near miss: the real per-cell match, and the way back.
       this.say(`So close: ${Math.floor(match * 100)}% match. Undo one fold?`, 4);
