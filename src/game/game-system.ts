@@ -21,7 +21,9 @@ import { Creature } from './creatures.js';
 import { FoldGame } from './fold-game.js';
 import { dailyLevel, dayNumber, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, startMusic, stopMusic } from './sfx.js';
+import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
+import { BadgePop } from './badge.js';
 import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
 import { ResultAction, ResultCard } from './result-card.js';
@@ -65,6 +67,9 @@ interface Progress {
   version?: number;
   /** Worlds with all ten levels solved (their parade has played). */
   worlds?: number[];
+  /** Badge ids earned. */
+  badges?: string[];
+  counters?: { palm?: number; waves?: number };
   /** Day numbers on which the daily fold was solved. */
   daily?: number[];
   muted?: boolean;
@@ -106,6 +111,7 @@ export class GameSystem extends createSystem({
     worldDone?: number;
   } | null = null;
   private resultCard!: ResultCard;
+  private badge = new BadgePop();
   private levelSelect!: LevelSelect;
   /** The level the result card is about, for Retry. */
   private lastLevel: Level | null = null;
@@ -173,6 +179,10 @@ export class GameSystem extends createSystem({
     });
     this.album = new Album(this.world);
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
+    this.world.createTransformEntity(this.badge.root, this.game.boardEntity);
+    this.badge.root.position.set(0, 0.36, -0.12);
+    this.zoo.onPalmRide = () => this.count('palm');
+    this.zoo.onWave = () => this.count('waves');
     this.levelSelect = new LevelSelect(this.world, {
       best: () => this.progress.best ?? {},
       streak: () => this.streak(),
@@ -196,7 +206,7 @@ export class GameSystem extends createSystem({
     });
     this.menu = new PalmMenu(this.world, [
       { icon: 'levels', label: 'Levels', run: () => this.openLevels(this.game.level.world) },
-      { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera) },
+      { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()) },
       { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
       { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
       { icon: 'sound', label: 'Sound', run: () => this.toggleSound() },
@@ -257,7 +267,7 @@ export class GameSystem extends createSystem({
           this.titleShown = true;
           this.title.stop();
         },
-        album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera),
+        album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
         hands: () => this.hands,
         settings: () => this.settingsPanel,
         occluders: () => this.occluders.root.children.length,
@@ -453,11 +463,56 @@ export class GameSystem extends createSystem({
     const planes = this.planeInfos();
     const meshes = this.meshInfos();
     const mat = this.game.boardRoot.getWorldPosition(this.watchPoint);
-    // Rebuilt when the scan or the mat changes; the head position is taken then.
-    const key = `${planes.length}:${meshes.length}:${mat.x.toFixed(2)},${mat.y.toFixed(2)},${mat.z.toFixed(2)}`;
+    // Rebuilt when the scan, the mat or the player's spot changes (a quarter
+    // metre or more), so the seat under them never hides the mat.
+    const head = this.world.camera.getWorldPosition(this.ear);
+    const q = (v: number) => Math.round(v * 4);
+    const key = `${planes.length}:${meshes.length}:${mat.x.toFixed(2)},${mat.y.toFixed(2)},${mat.z.toFixed(2)}:${q(head.x)},${q(head.y)},${q(head.z)}`;
     if (key === this.occluderKey) return;
     this.occluderKey = key;
-    this.occluders.update(planes, meshes, mat, this.world.camera.getWorldPosition(this.ear));
+    this.occluders.update(planes, meshes, mat, head);
+  }
+
+  private count(what: 'palm' | 'waves') {
+    this.progress.counters ??= {};
+    this.progress.counters[what] = (this.progress.counters[what] ?? 0) + 1;
+    this.checkBadges();
+    this.saveProgress();
+  }
+
+  private badgeStats(): AchievementStats {
+    const best = this.progress.best ?? {};
+    let flawless = 0;
+    for (let w = 0; w < WORLDS.length; w++) {
+      if (LEVELS.filter((l) => l.world === w).every((l) => best[l.id]?.stars === 3)) flawless++;
+    }
+    const kinds = this.zoo.collection().filter((e) => e.looks.length > 0).length;
+    return {
+      solves: Object.keys(best).length,
+      perfects: Object.values(best).filter((b) => b.stars === 3).length,
+      worldsDone: (this.progress.worlds ?? []).length,
+      flawlessWorlds: flawless,
+      streak: this.streak(),
+      kinds,
+      zoo: this.zoo.count,
+      palmRides: this.progress.counters?.palm ?? 0,
+      waves: this.progress.counters?.waves ?? 0,
+    };
+  }
+
+  /** Awards any badge just earned, one pop-up each. */
+  private checkBadges() {
+    this.progress.badges ??= [];
+    for (const id of newlyEarned(this.badgeStats(), this.progress.badges)) {
+      this.progress.badges.push(id);
+      const a = ACHIEVEMENTS.find((x) => x.id === id);
+      if (a) this.badge.show(a.title);
+    }
+  }
+
+  private badgeEntries() {
+    const got = this.progress.badges ?? [];
+    return ACHIEVEMENTS.map((a) => ({ title: a.title, how: a.how, earned: got.includes(a.id) }));
   }
 
   private toggleSound() {
@@ -534,6 +589,9 @@ export class GameSystem extends createSystem({
           if (!worldOpen(k, before) && worldOpen(k, after)) lines.push(`${WORLDS[k].name} world unlocked`);
         }
         c.banner = lines.join('   ·   ');
+      }
+      if (c.level.world >= 0 || this.game.isDaily) {
+        this.checkBadges();
       }
       this.saveProgress();
     }
@@ -661,6 +719,7 @@ export class GameSystem extends createSystem({
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.album.update(delta);
     this.resultCard.update(delta);
+    this.badge.update(delta);
     this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
     this.world.camera.getWorldPosition(this.ear);

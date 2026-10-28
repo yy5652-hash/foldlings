@@ -216,6 +216,9 @@ export class Menagerie {
   hands: Hands | null = null;
   /** While the player folds, nearby creatures watch the paper. */
   watch: Vector3 | null = null;
+  /** A creature hopped onto a palm / the zoo answered a wave. */
+  onPalmRide: (() => void) | null = null;
+  onWave: (() => void) | null = null;
 
   constructor(
     private world: World,
@@ -568,7 +571,10 @@ export class Menagerie {
     this.shock.update(dt);
     this.marker.update(dt, this.markerTime);
     const head = this.head();
-    if (this.hands?.waved) this.greet(head, 4);
+    if (this.hands?.waved) {
+      this.greet(head, 4);
+      this.onWave?.();
+    }
     for (const l of this.live) {
       const watching = this.watch && !l.travel && l.c.root.getWorldPosition(this.tmp2).distanceTo(this.watch) < 2.2;
       l.c.lookAt(watching ? this.watch : !l.travel || l.travel.t < 0 ? head : null);
@@ -762,6 +768,7 @@ export class Menagerie {
       l.perch = { hand: near, t: 0, from: l.c.root.position.clone(), lost: 0 };
       l.hover = 0;
       l.c.poke();
+      this.onPalmRide?.();
     }
   }
 

@@ -24,6 +24,12 @@ import type { CreatureKind } from './levels.js';
 import { LOOKS } from './levels.js';
 import { sfx } from './sfx.js';
 
+export interface BadgeEntry {
+  title: string;
+  how: string;
+  earned: boolean;
+}
+
 export interface AlbumEntry {
   kind: CreatureKind;
   /** Paper looks folded for this kind (indexes into LOOKS), most recent last. */
@@ -41,6 +47,11 @@ export class Album {
   private tex: CanvasTexture;
   private minis = new Group();
   private close: Button;
+  private tab: Button;
+  private page: 'zoo' | 'badges' = 'zoo';
+  private entries: AlbumEntry[] = [];
+  private streak = 0;
+  private badges: BadgeEntry[] = [];
   private unfold = 0;
   private open = false;
   private idle = 0;
@@ -69,6 +80,20 @@ export class Album {
     const ce = world.createTransformEntity(this.close.root, pe);
     ce.addComponent(RayInteractable);
     ce.addComponent(PokeInteractable);
+    // Flips between the creatures and the badges.
+    this.tab = new Button('next', () => {
+      sfx.click();
+      this.page = this.page === 'zoo' ? 'badges' : 'zoo';
+      this.idle = 0;
+      this.redraw();
+    }, 'Badges');
+    this.tab.root.name = 'AlbumTab';
+    this.tab.root.scale.setScalar(0.7);
+    this.tab.root.rotation.x = Math.PI / 2;
+    this.tab.root.position.set(-W / 2 + 0.03, H / 2 - 0.03, 0.004);
+    const te = world.createTransformEntity(this.tab.root, pe);
+    te.addComponent(RayInteractable);
+    te.addComponent(PokeInteractable);
     this.panel.visible = false;
     this.panel.position.set(0, -50, 0);
   }
@@ -78,9 +103,18 @@ export class Album {
   }
 
   /** Opens the page in front of the player with the zoo as it is now. */
-  show(entries: AlbumEntry[], streak: number, camera: { getWorldPosition(v: Vector3): Vector3; getWorldDirection(v: Vector3): Vector3 }) {
-    this.draw(entries, streak);
+  show(
+    entries: AlbumEntry[],
+    streak: number,
+    camera: { getWorldPosition(v: Vector3): Vector3; getWorldDirection(v: Vector3): Vector3 },
+    badges: BadgeEntry[] = [],
+  ) {
+    this.entries = entries;
+    this.streak = streak;
+    this.badges = badges;
+    this.page = 'zoo';
     this.buildMinis(entries);
+    this.redraw();
     camera.getWorldPosition(this.head);
     camera.getWorldDirection(this.fwd);
     this.fwd.y = 0;
@@ -103,6 +137,54 @@ export class Album {
     const col = i % COLS;
     const row = Math.floor(i / COLS);
     return { x: 40 + col * 240, y: 118 + row * 270, w: 224, h: 254 };
+  }
+
+  private redraw() {
+    this.minis.visible = this.page === 'zoo';
+    this.tab.setLabel(this.page === 'zoo' ? 'Badges' : 'Zoo');
+    if (this.page === 'zoo') this.draw(this.entries, this.streak);
+    else this.drawBadges();
+  }
+
+  /** Twelve badges: gold when earned, grey with how to earn them otherwise. */
+  private drawBadges() {
+    const c = this.canvas;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, c.width, c.height);
+    g.fillStyle = 'rgba(246,239,226,0.97)';
+    g.beginPath();
+    g.roundRect(4, 4, c.width - 8, c.height - 8, 36);
+    g.fill();
+    const got = this.badges.filter((b) => b.earned).length;
+    g.textAlign = 'center';
+    g.fillStyle = '#2f4a45';
+    g.font = '700 50px Georgia, "Times New Roman", serif';
+    g.fillText('Badges', c.width / 2, 70);
+    g.fillStyle = '#b0795a';
+    g.font = '600 28px system-ui, -apple-system, Segoe UI, sans-serif';
+    g.fillText(`${got} of ${this.badges.length} earned`, c.width / 2, 106);
+    this.badges.forEach((b, i) => {
+      const x = 40 + (i % 4) * 240;
+      const y = 132 + Math.floor(i / 4) * 175;
+      g.fillStyle = b.earned ? 'rgba(255,209,102,0.22)' : 'rgba(47,74,69,0.05)';
+      g.beginPath();
+      g.roundRect(x, y, 224, 162, 20);
+      g.fill();
+      const grad = g.createRadialGradient(x + 112, y + 52, 4, x + 112, y + 52, 36);
+      grad.addColorStop(0, b.earned ? '#ffe08a' : '#d9d2c5');
+      grad.addColorStop(1, b.earned ? '#d99a00' : '#b3a898');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x + 112, y + 52, 34, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = b.earned ? '#3b3027' : '#9a8f80';
+      g.font = '700 26px system-ui, -apple-system, Segoe UI, sans-serif';
+      g.fillText(b.title, x + 112, y + 118);
+      g.fillStyle = '#8a7a6a';
+      g.font = '500 17px system-ui, -apple-system, Segoe UI, sans-serif';
+      g.fillText(b.how, x + 112, y + 146, 212);
+    });
+    this.tex.needsUpdate = true;
   }
 
   private draw(entries: AlbumEntry[], streak: number) {
@@ -202,5 +284,6 @@ export class Album {
       this.panel.position.set(0, -50, 0);
     }
     this.close.update(dt);
+    this.tab.update(dt);
   }
 }
