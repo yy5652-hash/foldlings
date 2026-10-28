@@ -33,6 +33,8 @@ import {
   Facet,
   FoldSpec,
   foldPaper,
+  bestMatch,
+  symmetricTargets,
   initialPaper,
   paperBounds,
   PaperState,
@@ -106,6 +108,8 @@ export class FoldGame {
   private creases: [V2, V2][] = [];
   private creaseHistory: number[] = [];
   private target: Uint8Array = new Uint8Array(0);
+  /** The goal and its turned or mirrored twins; matching any one solves. */
+  private targets: Uint8Array[] = [];
   private targetFacets: Facet[] = [];
   /** Picture after each step of the known solution, for hints. */
   private prefixes: Uint8Array[] = [];
@@ -253,6 +257,7 @@ export class FoldGame {
     if (!goal) throw new Error(`Level ${level.id} has an invalid solution`);
     this.targetFacets = goal.facets;
     this.target = rasterize(goal);
+    this.targets = symmetricTargets(goal);
     this.prefixes = [rasterize(initialPaper())];
     let s: PaperState | null = initialPaper();
     for (const f of level.solution) {
@@ -812,7 +817,7 @@ export class FoldGame {
         const parts = splitPaper(this.paper, snap.line, snap.s)!;
         this.paperView.setSplit(parts.stay, parts.move, snap.line, snap.s);
         const result = foldPaper(this.paper, snap.line, snap.s);
-        const solves = !!result && rasterMatch(rasterize(result), this.target) >= 0.999;
+        const solves = !!result && bestMatch(rasterize(result), this.targets) >= 0.999;
         if (solves && !d.solves) sfx.warm();
         else sfx.snap();
         d.solves = solves;
@@ -873,7 +878,13 @@ export class FoldGame {
     this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
     sfx.fold();
-    if (rasterMatch(rasterize(this.paper), this.target) >= 0.999) {
+    const match = bestMatch(rasterize(this.paper), this.targets);
+    if (match < 0.999 && match >= 0.85 && this.folds >= this.level.par + 1) {
+      // Honest about a near miss: the real per-cell match, and the way back.
+      this.say(`So close: ${Math.floor(match * 100)}% match. Undo one fold?`, 4);
+      this.button('undo')?.pulse(3);
+    }
+    if (match >= 0.999) {
       this.solved = true;
       this.glow = 1;
       this.board.setGhostOpacity(0);

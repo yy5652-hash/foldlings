@@ -3,6 +3,7 @@ import { onBoard, rawCrease, snapCrease } from './creases.js';
 import { applyAffine, polygonArea } from './geom.js';
 import {
   applyFolds,
+  bestMatch,
   BOARD,
   creaseLine,
   foldPaper,
@@ -12,6 +13,7 @@ import {
   RASTER_W,
   rasterize,
   rasterMatch,
+  symmetricTargets,
   topFacetAt,
 } from './paper.js';
 
@@ -135,5 +137,30 @@ describe('daily fold', async () => {
     expect(dailyLevel(20400).solution).toEqual(a.solution);
     const days = new Set(Array.from({ length: 30 }, (_, i) => JSON.stringify(dailyLevel(20400 + i).solution)));
     expect(days.size).toBe(30);
+  });
+});
+
+describe('symmetric goals', () => {
+  it('accepts the goal folded as its mirror image', () => {
+    // Folding the left half over is the mirror of folding the right half over.
+    const goal = applyFolds([{ f: 'v', k: 0, s: 1 }])!;
+    const mirror = applyFolds([{ f: 'v', k: 0, s: -1 }])!;
+    const targets = symmetricTargets(goal);
+    expect(rasterMatch(rasterize(mirror), rasterize(goal))).toBeLessThan(0.999);
+    expect(bestMatch(rasterize(mirror), targets)).toBeGreaterThanOrEqual(0.999);
+  });
+
+  it('accepts a diagonal fold turned a quarter', () => {
+    const goal = applyFolds([{ f: 'd', k: 0, s: 1 }])!;
+    const turned = applyFolds([{ f: 'a', k: 0, s: 1 }])!;
+    const other = applyFolds([{ f: 'a', k: 0, s: -1 }])!;
+    const targets = symmetricTargets(goal);
+    expect(Math.max(bestMatch(rasterize(turned), targets), bestMatch(rasterize(other), targets))).toBeGreaterThanOrEqual(0.999);
+  });
+
+  it('does not accept a different picture', () => {
+    const goal = applyFolds([{ f: 'v', k: 0, s: 1 }])!;
+    const other = applyFolds([{ f: 'd', k: 0, s: 1 }])!;
+    expect(bestMatch(rasterize(other), symmetricTargets(goal))).toBeLessThan(0.999);
   });
 });

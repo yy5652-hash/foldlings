@@ -245,3 +245,43 @@ export function rasterKey(r: Uint8Array): string {
   for (let i = 0; i < r.length; i++) s += r[i];
   return s;
 }
+
+/**
+ * The goal as seen turned or mirrored any of the eight ways the square sheet
+ * allows, each rasterised from geometry so ties on diagonal edges break the
+ * same way as for the paper. A solve in any of them counts.
+ */
+export function symmetricTargets(state: PaperState): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  const seen = new Set<string>();
+  for (let t = 0; t < 8; t++) {
+    const map = (p: V2): V2 => {
+      let x = p.x;
+      let y = p.y;
+      if (t & 1) [x, y] = [y, x];
+      if (t & 2) x = -x;
+      if (t & 4) y = -y;
+      return { x, y };
+    };
+    // An odd number of reflections reverses winding; keep polygons CCW.
+    const odd = ((t & 1) + ((t >> 1) & 1) + ((t >> 2) & 1)) % 2 === 1;
+    const facets = state.facets.map((f) => {
+      const poly = f.poly.map(map);
+      return { ...f, poly: odd ? poly.reverse() : poly };
+    });
+    const r = rasterize({ facets });
+    const key = r.join('');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+/** Best match of `r` against any of `targets` (0..1, honest per cell). */
+export function bestMatch(r: Uint8Array, targets: readonly Uint8Array[]): number {
+  let best = 0;
+  for (const t of targets) best = Math.max(best, rasterMatch(r, t));
+  return best;
+}
+
