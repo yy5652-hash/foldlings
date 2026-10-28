@@ -62,7 +62,14 @@ interface Live {
   hover?: number;
   /** Countdown to a cheer or greeting hop. */
   cheerIn?: number;
+  /** A lap around the player when its world is complete. */
+  parade?: { t: number; home: Vector3; quat: Quaternion; angle: number } | null;
 }
+
+/** World-complete parade: rise, one lap around the player, home again. */
+const PARADE_RISE = 0.9;
+const PARADE_LAP = 3.6;
+const PARADE_HOME = 1.1;
 
 interface Home {
   pos: Vector3;
@@ -204,6 +211,7 @@ export class Menagerie {
   private avoid = new Vector3(0, -10, 0);
   private tmp = new Vector3();
   private tmp2 = new Vector3();
+  private paradeCentre = new Vector3();
   /** Tracked hands, for palm rides and waves (null outside XR hands). */
   hands: Hands | null = null;
   /** While the player folds, nearby creatures watch the paper. */
@@ -573,6 +581,11 @@ export class Menagerie {
         this.stepPerch(l, dt, head);
         continue;
       }
+      if (l.parade) {
+        l.c.update(dt);
+        this.stepParade(l, dt, head);
+        continue;
+      }
       if (!l.travel && this.hands) this.checkPalm(l, dt);
       l.c.update(dt);
       // Now and then a resting creature stirs on its own (about every 40 s).
@@ -650,6 +663,67 @@ export class Menagerie {
       kind,
       looks: this.saved.filter((s) => s.kind === kind).map((s) => s.look),
     }));
+  }
+
+  /**
+   * A world is complete: every creature of that kind in the room flies one
+   * lap around the player, with a big ring and confetti. Returns how many.
+   */
+  parade(kind: CreatureKind, color: string): number {
+    const head = this.head();
+    // The whole zoo joins in, the completed world's kind leading.
+    const flock = this.live
+      .filter((l) => !l.travel && !l.perch)
+      .sort((a, b) => (a.c.kind === kind ? 0 : 1) - (b.c.kind === kind ? 0 : 1));
+    this.paradeCentre.copy(head).addScaledVector(this.forward(), 0.7);
+    this.paradeCentre.y -= 0.22;
+    flock.forEach((l, i) => {
+      l.orbit = null;
+      l.parade = {
+        t: -i * 0.18,
+        home: l.c.root.position.clone(),
+        quat: l.c.root.quaternion.clone(),
+        angle: (i / Math.max(1, flock.length)) * Math.PI * 2,
+      };
+      l.c.lookAt(null);
+    });
+    const at = head.clone().add(new Vector3(0, -0.25, 0)).addScaledVector(this.forward(), 0.6);
+    this.confetti.burst(at, color);
+    this.shock.burst(at, 2.4);
+    sfx.worldComplete();
+    return flock.length;
+  }
+
+  private stepParade(l: Live, dt: number, _head: Vector3) {
+    const pr = l.parade!;
+    pr.t += dt;
+    const root = l.c.root;
+    if (pr.t < 0) return;
+    // A loop in front of the player, where a seated view can follow it.
+    const local = this.toRoom(this.paradeCentre);
+    const r = 0.42;
+    const ang = pr.angle + (Math.max(0, pr.t - PARADE_RISE) / PARADE_LAP) * Math.PI * 2;
+    this.tmp2.set(local.x + Math.cos(ang) * r, local.y + Math.sin(ang * 2 + pr.t) * 0.06, local.z + Math.sin(ang) * r * 0.6);
+    l.c.setTravelling(true);
+    if (pr.t < PARADE_RISE) {
+      const e = pr.t / PARADE_RISE;
+      root.position.lerpVectors(pr.home, this.tmp2, e * e * (3 - 2 * e));
+    } else if (pr.t < PARADE_RISE + PARADE_LAP) {
+      root.position.copy(this.tmp2);
+    } else {
+      const e = Math.min(1, (pr.t - PARADE_RISE - PARADE_LAP) / PARADE_HOME);
+      root.position.lerpVectors(this.tmp2, pr.home, e * e * (3 - 2 * e));
+      if (e >= 1) {
+        root.position.copy(pr.home);
+        root.quaternion.copy(pr.quat);
+        l.parade = null;
+        l.c.setTravelling(false);
+        if (l.endAir || l.c.habitat === 'air' || l.c.habitat === 'high-air') this.startOrbit(l);
+        return;
+      }
+    }
+    // Face along the lap.
+    root.rotation.set(0, -ang + Math.PI, 0);
   }
 
   /** Every creature in view hops and calls, one after another (a solve). */
@@ -890,18 +964,20 @@ class Shockwave {
     this.mesh.visible = false;
   }
 
-  burst(at: Vector3) {
+  burst(at: Vector3, size = 1) {
     this.mesh.position.copy(at);
     this.mesh.position.y -= 0.06;
     this.life = 1;
+    this.size = size;
     this.mesh.visible = true;
   }
+  private size = 1;
 
   update(dt: number) {
     if (this.life <= 0) return;
     this.life = Math.max(0, this.life - dt / 0.7);
     const u = 1 - this.life;
-    this.mesh.scale.setScalar(0.03 + (1 - Math.pow(1 - u, 3)) * 0.42);
+    this.mesh.scale.setScalar((0.03 + (1 - Math.pow(1 - u, 3)) * 0.42) * this.size);
     (this.mesh.material as MeshBasicMaterial).opacity = this.life * 0.9;
     if (this.life <= 0) this.mesh.visible = false;
   }

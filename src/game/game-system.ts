@@ -25,7 +25,7 @@ import { Album } from './album.js';
 import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
 import { ResultAction, ResultCard } from './result-card.js';
-import { Best, mergeBest, Result } from './score.js';
+import { Best, mergeBest, Result, totalStars, worldOpen } from './score.js';
 import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { PalmMenu } from './palm-menu.js';
@@ -63,6 +63,8 @@ interface Progress {
   best?: Record<string, Best>;
   /** 2 since the eighty-level campaign. */
   version?: number;
+  /** Worlds with all ten levels solved (their parade has played). */
+  worlds?: number[];
   /** Day numbers on which the daily fold was solved. */
   daily?: number[];
   muted?: boolean;
@@ -98,6 +100,10 @@ export class GameSystem extends createSystem({
     sayAt: number;
     nextAt: number;
     result: Result;
+    /** Gold line for the result card: a world completed or opened. */
+    banner?: string;
+    /** World just completed, for the parade, or -1. */
+    worldDone?: number;
   } | null = null;
   private resultCard!: ResultCard;
   private levelSelect!: LevelSelect;
@@ -243,6 +249,7 @@ export class GameSystem extends createSystem({
             })(),
           })),
         menu: () => this.menu,
+        progress: () => this.progress,
         room: () => this.room,
         levels: (w = -1) => this.openLevels(w),
         book: () => this.levelSelect,
@@ -508,7 +515,25 @@ export class GameSystem extends createSystem({
         if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
         this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
         this.progress.best ??= {};
+        const before = totalStars(this.progress.best);
         this.progress.best[c.level.id] = mergeBest(this.progress.best[c.level.id], c.result);
+        const after = totalStars(this.progress.best);
+        const w = c.level.world;
+        const done = LEVELS.filter((l) => l.world === w).every((l) => this.progress.best![l.id]);
+        this.progress.worlds ??= [];
+        const lines: string[] = [];
+        c.worldDone = -1;
+        if (done && !this.progress.worlds.includes(w)) {
+          this.progress.worlds.push(w);
+          c.worldDone = w;
+          let s = 0;
+          for (const l of LEVELS) if (l.world === w) s += this.progress.best[l.id]?.stars ?? 0;
+          lines.push(`${WORLDS[w].name} world complete!  ★ ${s} / ${PER_WORLD * 3}`);
+        }
+        for (let k = 0; k < WORLDS.length; k++) {
+          if (!worldOpen(k, before) && worldOpen(k, after)) lines.push(`${WORLDS[k].name} world unlocked`);
+        }
+        c.banner = lines.join('   ·   ');
       }
       this.saveProgress();
     }
@@ -529,7 +554,10 @@ export class GameSystem extends createSystem({
       this.celebrate = null;
       this.lastLevel = c.level;
       const sub = c.level.world < 0 ? 'Daily Fold' : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
-      this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id]);
+      this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id], c.banner ?? '');
+      if (c.worldDone !== undefined && c.worldDone >= 0 && !this.settings.reduceMotion) {
+        this.zoo.parade(WORLDS[c.worldDone].kind, c.level.look.front);
+      }
     }
   }
 

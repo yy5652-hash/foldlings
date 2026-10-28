@@ -57,6 +57,8 @@ export class ResultCard {
   private sub = '';
   private line = '';
   private bestLine = '';
+  /** A gold line for a world completed or opened ("" for none). */
+  private banner = '';
   private shownSecond = -1;
 
   constructor(world: World, parent: Entity, private onAction: (a: ResultAction) => void) {
@@ -99,9 +101,10 @@ export class ResultCard {
     return this.t >= 0;
   }
 
-  show(title: string, sub: string, r: Result, best: Best | undefined) {
+  show(title: string, sub: string, r: Result, best: Best | undefined, banner = '') {
     this.title = title;
     this.sub = sub;
+    this.banner = banner;
     this.line = `Folds ${r.folds}  ·  Par ${r.par}` + (r.hinted ? '  ·  hint used' : '');
     this.bestLine = best ? `Best ${'★'.repeat(best.stars)}${'☆'.repeat(3 - best.stars)}` : '';
     this.earned = r.stars;
@@ -145,9 +148,15 @@ export class ResultCard {
     g.fillStyle = '#2f4a45';
     g.font = '700 64px Georgia, "Times New Roman", serif';
     g.fillText(this.title, 512, 268);
-    g.fillStyle = '#8a7a6a';
-    g.font = '500 34px system-ui, -apple-system, Segoe UI, sans-serif';
-    g.fillText(this.sub, 512, 318);
+    if (this.banner) {
+      g.fillStyle = '#d38a00';
+      g.font = '700 36px system-ui, -apple-system, Segoe UI, sans-serif';
+      g.fillText(this.banner, 512, 320);
+    } else {
+      g.fillStyle = '#8a7a6a';
+      g.font = '500 34px system-ui, -apple-system, Segoe UI, sans-serif';
+      g.fillText(this.sub, 512, 318);
+    }
     g.fillStyle = '#3b3027';
     g.font = '600 40px system-ui, -apple-system, Segoe UI, sans-serif';
     g.fillText(this.line, 512, 386);

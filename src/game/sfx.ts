@@ -241,6 +241,12 @@ export const sfx = {
     bell([783.99, 987.77, 1174.66][Math.min(2, i)], 0.09);
     rustle(0.12, 4200, 1.2, 0.08);
   },
+  /** A whole world complete: a rising run and a held chord. */
+  worldComplete() {
+    [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568].forEach((f, i) => bell(f, 0.08, i * 0.09));
+    [1046.5, 1318.5, 1568].forEach((f) => bell(f, 0.05, 0.7));
+    rustle(0.8, 5200, 0.5, 0.1, 0.5);
+  },
   /** All three stars: a short fanfare. */
   perfect() {
     [1046.5, 1318.5, 1568, 2093].forEach((f, i) => bell(f, 0.07, 0.08 + i * 0.07));
