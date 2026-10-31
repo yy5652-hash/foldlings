@@ -1,16 +1,6 @@
-import {
-  CanvasTexture,
-  Group,
-  Mesh,
-  MeshBasicMaterial,
-  PlaneGeometry,
-  PokeInteractable,
-  RayInteractable,
-  SRGBColorSpace,
-  Vector3,
-  World,
-} from '@iwsdk/core';
-import { Button, IconKind } from './button.js';
+import { World } from '@iwsdk/core';
+import { Button } from './button.js';
+import { GlassWindow, INK, setFont, TextLabel, Toggle } from './glass.js';
 import { safeGet, safeSet } from './room.js';
 import { sfx } from './sfx.js';
 
@@ -52,148 +42,155 @@ export function saveSettings(state: SettingsState) {
   safeSet(SETTINGS_KEY, JSON.stringify(state));
 }
 
-const ROWS: { key: 'easyFolds' | 'leftHanded' | 'reduceMotion' | 'highContrast'; label: string; icon: IconKind }[] = [
-  { key: 'easyFolds', label: 'Easy folds', icon: 'hint' },
-  { key: 'leftHanded', label: 'Left handed', icon: 'back' },
-  { key: 'reduceMotion', label: 'Reduce motion', icon: 'restart' },
-  { key: 'highContrast', label: 'High contrast', icon: 'daily' },
+const ROWS: { key: 'easyFolds' | 'leftHanded' | 'reduceMotion' | 'highContrast'; label: string; hint: string }[] = [
+  { key: 'easyFolds', label: 'Easy folds', hint: 'More forgiving creases' },
+  { key: 'leftHanded', label: 'Left-handed', hint: 'Swaps the controls' },
+  { key: 'reduceMotion', label: 'Reduce motion', hint: 'Calmer animation' },
+  { key: 'highContrast', label: 'High contrast', hint: 'Stronger paper and lines' },
+];
+const STEPS: { key: 'matHeight' | 'matDistance'; label: string }[] = [
+  { key: 'matHeight', label: 'Mat height' },
+  { key: 'matDistance', label: 'Mat distance' },
 ];
 const AUTO_CLOSE = 25;
 
-/** Settings stay where they opened, just like the palm menu. */
+const W = 0.34;
+const PX = 1024;
+/** Metres per canvas pixel. */
+const M = W / PX;
+const PAD = 44;
+const TOP = 132;
+const ROW_H = 112;
+const GAP = 30;
+const SECTION_W = PX - PAD * 2;
+const PY = TOP + ROWS.length * ROW_H + GAP + STEPS.length * ROW_H + PAD;
+const H = PY * M;
+
+/** Settings stay where they opened, just like the menu. */
 export class SettingsPanel {
-  readonly panel = new Group();
-  private buttons: Button[] = [];
+  private win: GlassWindow;
   private state: SettingsState;
-  private unfold = 0;
-  private wantOpen = false;
-  private idle = 0;
-  private head = new Vector3();
-  private fwd = new Vector3();
 
   constructor(
-    private world: World,
+    world: World,
     state: SettingsState,
     private onChange: (state: SettingsState) => void,
   ) {
     this.state = { ...state };
-    this.panel.name = 'SettingsPanel';
-    const c = document.createElement('canvas');
-    c.width = 512;
-    c.height = 960;
-    const g = c.getContext('2d')!;
-    g.fillStyle = 'rgba(30,46,42,0.94)';
-    g.beginPath();
-    g.roundRect(4, 4, c.width - 8, c.height - 8, 36);
-    g.fill();
-    g.strokeStyle = 'rgba(246,240,228,0.35)';
-    g.lineWidth = 4;
-    g.stroke();
-    const t = new CanvasTexture(c);
-    t.colorSpace = SRGBColorSpace;
-    const page = new Mesh(new PlaneGeometry(0.32, 0.6), new MeshBasicMaterial({ map: t, transparent: true }));
-    page.renderOrder = -5;
-    this.panel.add(page);
-    const pe = world.createTransformEntity(this.panel);
+    this.win = new GlassWindow(world, { name: 'SettingsPanel', w: W, h: H, px: PX, r: 0.03, autoClose: AUTO_CLOSE });
+    this.drawPage();
+    const rowY = (i: number) => TOP + i * ROW_H;
+
     ROWS.forEach((row, i) => {
-      const b = new Button(row.icon, () => {
-        if (!this.wantOpen || this.unfold < 0.9) return;
+      const y = rowY(i);
+      const [, ly] = this.win.toLocal(0, y + ROW_H / 2);
+      const toggle = new Toggle(this.state[row.key], 0.019);
+      toggle.root.position.set(W / 2 - PAD * M - 0.018 - 0.0155, ly, 0.0015);
+      this.win.content.add(toggle.root);
+      this.win.addTick(toggle);
+      this.win.addHit(PAD, y, SECTION_W, ROW_H, 28, () => {
         this.state[row.key] = !this.state[row.key];
-        b.setLabel(`${row.label}: ${this.state[row.key] ? 'On' : 'Off'}`);
-        this.idle = 0;
+        toggle.on = this.state[row.key];
         sfx.click();
         this.onChange({ ...this.state });
-      }, `${row.label}: ${this.state[row.key] ? 'On' : 'Off'}`);
-      b.root.name = `Settings_${row.key}`;
-      b.root.position.set(-0.105, 0.21 - i * 0.085, 0.004);
-      b.setLabelBeside(1.7);
-      this.buttons.push(b);
+      }, `Settings_${row.key}`);
     });
+
     // Two steppers for where the mat sits: lower/higher, nearer/farther.
-    const steps: { key: 'matHeight' | 'matDistance'; label: string }[] = [
-      { key: 'matHeight', label: 'Mat height' },
-      { key: 'matDistance', label: 'Mat distance' },
-    ];
-    steps.forEach((row, j) => {
-      const y = 0.21 - (ROWS.length + j) * 0.085;
+    STEPS.forEach((row, j) => {
+      const y = rowY(ROWS.length + j) + GAP;
+      const [, ly] = this.win.toLocal(0, y + ROW_H / 2);
+      const right = W / 2 - PAD * M - 0.018;
+      const value = new TextLabel(0.0155, 56, 500, INK.secondary);
+      value.mesh.position.set(right - 0.092, ly, 0.0015);
+      this.win.content.add(value.mesh);
       const text = () => {
         const cm = this.state[row.key] * MAT_STEP[row.key];
-        return `${row.label}: ${cm > 0 ? '+' : ''}${cm} cm`;
+        return `${cm > 0 ? '+' : ''}${cm} cm`;
       };
-      const plus = new Button('plus', () => nudge(1), text());
-      const minus = new Button('minus', () => nudge(-1));
+      value.set(text());
       const nudge = (d: number) => {
-        if (!this.wantOpen || this.unfold < 0.9) return;
+        if (!this.win.ready) return;
         this.state[row.key] = Math.max(-3, Math.min(3, this.state[row.key] + d));
-        plus.setLabel(text());
-        this.idle = 0;
+        value.set(text());
+        this.win.touch();
         sfx.click();
         this.onChange({ ...this.state });
       };
+      const minus = new Button('minus', () => nudge(-1), '', { r: 0.0155 });
+      const plus = new Button('plus', () => nudge(1), '', { r: 0.0155 });
       minus.root.name = `Settings_${row.key}_minus`;
       plus.root.name = `Settings_${row.key}_plus`;
-      minus.root.position.set(-0.118, y, 0.004);
-      plus.root.position.set(-0.058, y, 0.004);
-      minus.root.scale.setScalar(0.8);
-      plus.root.scale.setScalar(0.8);
-      plus.setLabelBeside(1.6);
-      this.buttons.push(minus, plus);
+      minus.root.position.set(right - 0.0155 - 0.038, ly, 0.0025);
+      plus.root.position.set(right - 0.0155 + 0.002, ly, 0.0025);
+      for (const b of [minus, plus]) {
+        b.root.rotation.x = Math.PI / 2;
+        this.win.addControl(b.root, b);
+      }
     });
+
     const close = new Button('close', () => {
-      if (!this.wantOpen || this.unfold < 0.9) return;
+      if (!this.win.ready) return;
       sfx.click();
       this.close();
-    });
+    }, '', { r: 0.015 });
     close.root.name = 'Settings_close';
-    close.root.position.set(0.128, 0.265, 0.004);
-    close.root.scale.setScalar(0.7);
-    this.buttons.push(close);
-    for (const b of this.buttons) {
-      b.root.rotation.x = Math.PI / 2;
-      const e = world.createTransformEntity(b.root, pe);
-      e.addComponent(RayInteractable);
-      e.addComponent(PokeInteractable);
-      const target = b.root as unknown as { addEventListener(type: string, fn: () => void): void };
-      target.addEventListener('pointerenter', () => { this.idle = 0; });
-    }
-    this.panel.visible = false;
-    this.panel.position.set(0, -50, 0);
+    close.root.position.set(0, -H / 2 - 0.024, 0.006);
+    close.root.rotation.x = Math.PI / 2;
+    this.win.addControl(close.root, close);
+  }
+
+  private drawPage() {
+    const g = this.win.clear();
+    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    g.fillStyle = INK.primary;
+    setFont(g, 58, 700, -0.8);
+    g.fillText('Settings', PAD + 8, 76);
+
+    const section = (y: number, rows: number) => {
+      g.fillStyle = INK.section;
+      g.beginPath();
+      g.roundRect(PAD, y, SECTION_W, rows * ROW_H, 28);
+      g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.09)';
+      for (let i = 1; i < rows; i++) g.fillRect(PAD + 32, y + i * ROW_H - 1, SECTION_W - 32, 2);
+    };
+    section(TOP, ROWS.length);
+    section(TOP + ROWS.length * ROW_H + GAP, STEPS.length);
+
+    ROWS.forEach((row, i) => {
+      const y = TOP + i * ROW_H;
+      g.fillStyle = INK.primary;
+      setFont(g, 34, 500);
+      g.fillText(row.label, PAD + 32, y + ROW_H / 2 - 17);
+      g.fillStyle = INK.secondary;
+      setFont(g, 25, 400);
+      g.fillText(row.hint, PAD + 32, y + ROW_H / 2 + 22);
+    });
+    STEPS.forEach((row, j) => {
+      const y = TOP + (ROWS.length + j) * ROW_H + GAP;
+      g.fillStyle = INK.primary;
+      setFont(g, 34, 500);
+      g.fillText(row.label, PAD + 32, y + ROW_H / 2);
+    });
+    this.win.commit();
   }
 
   get isOpen(): boolean {
-    return this.wantOpen;
+    return this.win.isOpen;
   }
 
   open() {
-    this.world.camera.getWorldPosition(this.head);
-    this.world.camera.getWorldDirection(this.fwd);
-    this.fwd.y = 0;
-    if (this.fwd.lengthSq() < 1e-4) this.fwd.set(0, 0, -1);
-    this.fwd.normalize();
-    this.panel.position.copy(this.head).addScaledVector(this.fwd, 0.45);
-    this.panel.position.y -= 0.12;
-    this.panel.lookAt(this.head);
-    this.panel.visible = true;
-    this.wantOpen = true;
-    this.idle = 0;
+    this.win.open(0.46, 0.1);
     sfx.pick();
   }
 
   close() {
-    this.wantOpen = false;
+    this.win.close();
   }
 
   update(dt: number) {
-    this.unfold += ((this.wantOpen ? 1 : 0) - this.unfold) * Math.min(1, dt * 12);
-    if (this.wantOpen) {
-      this.idle += dt;
-      if (this.idle > AUTO_CLOSE) this.close();
-    }
-    this.panel.scale.set(1, Math.max(0.02, this.unfold), 1);
-    if (!this.wantOpen && this.unfold < 0.03 && this.panel.visible) {
-      this.panel.visible = false;
-      this.panel.position.set(0, -50, 0);
-    }
-    for (const b of this.buttons) b.update(dt);
+    this.win.update(dt);
   }
 }

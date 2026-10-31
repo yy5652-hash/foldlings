@@ -20,7 +20,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
   Object3D,
   Vector3,
 } from '@iwsdk/core';
@@ -59,7 +59,7 @@ export interface Rig {
   edges: LineSegments[];
 }
 
-const paper = new MeshLambertMaterial({ vertexColors: true, side: FrontSide });
+const paper = new MeshStandardMaterial({ vertexColors: true, side: FrontSide, roughness: 0.82, metalness: 0, envMapIntensity: 0.95 });
 const eyeMat = new MeshBasicMaterial({ vertexColors: true });
 
 /** One unit eye: a flattened ink dot with its white glint, in one draw call. */
@@ -147,6 +147,7 @@ class Model {
     g.computeVertexNormals();
     const out = new Group();
     const mesh = new Mesh(g, paper);
+    mesh.castShadow = true;
     mesh.name = 'Paper';
     const edges = new LineSegments(new EdgesGeometry(g, 14), this.lines);
     edges.name = 'Creases';

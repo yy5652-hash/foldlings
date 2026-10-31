@@ -20,6 +20,7 @@ import {
   SRGBColorSpace,
   Vector3,
 } from '@iwsdk/core';
+import { INK, setFont } from './glass.js';
 import type { Surface } from './room.js';
 
 const DURATION = 4.2;
@@ -46,11 +47,14 @@ varying vec3 vWorld;
 void main() {
   float d = length(vWorld.xz - origin.xz);
   if (d > radius) discard;
-  vec2 g = abs(fract(vSurf * 10.0 + 0.5) - 0.5);
-  float line = 1.0 - smoothstep(0.0, 0.035, min(g.x, g.y));
-  float front = exp(-pow((radius - d) * 9.0, 2.0));
-  float a = (0.05 + 0.5 * line + 0.5 * front) * fade * boost;
-  gl_FragColor = vec4(color * (0.6 + front * 0.8), a);
+  float behind = radius - d;
+  float wave = exp(-pow(behind * 4.2, 2.0));
+  // Fine dots that catch the light as the wave passes, then settle.
+  vec2 g = fract(vSurf * 20.0) - 0.5;
+  float dots = 1.0 - smoothstep(0.05, 0.13, length(g));
+  float tail = exp(-behind * 1.5);
+  float a = (0.13 * wave + dots * (0.07 + 0.8 * tail)) * fade * boost;
+  gl_FragColor = vec4(color, a);
 }`;
 
 function labelTexture(text: string): CanvasTexture {
@@ -58,33 +62,32 @@ function labelTexture(text: string): CanvasTexture {
   c.width = 512;
   c.height = 96;
   const g = c.getContext('2d')!;
-  g.font = '600 40px ui-monospace, SFMono-Regular, Menlo, monospace';
-  const w = Math.min(500, g.measureText(text).width + 44);
-  g.fillStyle = 'rgba(6,24,30,0.72)';
-  g.strokeStyle = 'rgba(120,240,255,0.9)';
-  g.lineWidth = 3;
+  setFont(g, 44, 500);
+  const w = Math.min(500, g.measureText(text).width + 64);
+  const x = (512 - w) / 2;
+  g.fillStyle = 'rgba(28,29,34,0.66)';
   g.beginPath();
-  g.roundRect((512 - w) / 2, 14, w, 68, 10);
+  g.roundRect(x, 12, w, 72, 36);
   g.fill();
+  const rim = g.createLinearGradient(0, 12, 0, 84);
+  rim.addColorStop(0, 'rgba(255,255,255,0.55)');
+  rim.addColorStop(1, 'rgba(255,255,255,0.08)');
+  g.strokeStyle = rim;
+  g.lineWidth = 2;
   g.stroke();
-  g.fillStyle = '#bff8ff';
+  g.fillStyle = INK.primary;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(text, 256, 49);
   const t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
 }
 
 function niceLabel(s: Surface): string {
-  const raw = (s.label || s.kind).replace(/_/g, ' ').toUpperCase();
-  const xs = s.polygon.map((p) => p.x);
-  const ys = s.polygon.map((p) => p.y);
-  const zs = s.polygon.map((p) => p.z);
-  const span = (v: number[]) => Math.max(...v) - Math.min(...v);
-  const a = s.kind === 'wall' ? Math.max(span(xs), span(zs)) : span(xs);
-  const b = s.kind === 'wall' ? span(ys) : span(zs);
-  return `${raw} · ${a.toFixed(1)}×${b.toFixed(1)} m`;
+  const raw = (s.label || s.kind).replace(/_/g, ' ');
+  return raw[0].toUpperCase() + raw.slice(1);
 }
 
 interface Item {
@@ -118,7 +121,7 @@ export class RoomScan {
       [...surfaces]
         .filter((s) => s.kind !== 'floor')
         .sort((a, b) => a.center.distanceTo(origin) - b.center.distanceTo(origin))
-        .slice(0, 8),
+        .slice(0, 5),
     );
     for (const s of surfaces) {
       if (s.polygon.length < 3) continue;
@@ -153,7 +156,7 @@ export class RoomScan {
         side: DoubleSide,
         blending: AdditiveBlending,
         uniforms: {
-          color: { value: new Color(isChosen ? 0xffd166 : 0x5ee8ff) },
+          color: { value: new Color(isChosen ? 0xffe2a8 : 0xffffff) },
           origin: { value: this.origin },
           radius: { value: 0 },
           fade: { value: 1 },
@@ -169,7 +172,7 @@ export class RoomScan {
         label = new Sprite(
           new SpriteMaterial({ map: labelTexture(niceLabel(s)), transparent: true, depthWrite: false, depthTest: false }),
         );
-        label.scale.set(0.34, 0.064, 1);
+        label.scale.set(0.26, 0.049, 1);
         label.position.copy(s.center).addScaledVector(s.normal, s.kind === 'wall' ? 0.05 : 0.09);
         label.renderOrder = 81;
         label.visible = false;

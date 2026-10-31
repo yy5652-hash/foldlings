@@ -45,6 +45,7 @@ import {
 } from '../fold/paper.js';
 import { BoardView } from './board-view.js';
 import { Button, IconKind } from './button.js';
+import { CONTROL_GLASS, fadeTree, floatOverRoom, follow, LAYER, Surface } from './glass.js';
 import { Guide } from './guide.js';
 import { Result, scoreSolve } from './score.js';
 import { HandGrace, HandsMissing } from './hand-grace.js';
@@ -93,6 +94,14 @@ export interface FoldGameEvents {
   footer?: () => string;
 }
 
+/** The capsules beside the mat: size, then where they float and how they tilt. */
+const CAPSULE_W = 0.058;
+const CAPSULE_H = 0.156;
+const CAPSULE_X = 0.3;
+const CAPSULE_Y = 0.052;
+const CAPSULE_Z = 0.06;
+const CAPSULE_TILT = -0.92;
+
 export class FoldGame {
   readonly boardRoot = new Group();
   readonly boardEntity: Entity;
@@ -100,6 +109,7 @@ export class FoldGame {
   private textures: PaperTextures;
   private paperView: PaperView;
   private buttons: Button[] = [];
+  private capsules: { root: Group; entity: Entity }[] = [];
   private easyFolds = false;
   private reduceMotion = false;
 
@@ -175,12 +185,15 @@ export class FoldGame {
     target.addEventListener('pointerup', (e) => this.onRayUp(e));
     target.addEventListener('pointercancel', (e) => this.onRayUp(e));
 
-    // Most-used tokens sit nearest the player.
-    // Everything else lives in the menu (palm-up or the menu token).
-    this.addButton('undo', 0.295, -0.12, () => this.undo(), 'Undo');
-    this.addButton('hint', 0.295, -0.01, () => this.hint(), 'Hint');
-    this.addButton('menu', -0.295, -0.12, () => this.events.onMenu?.(), 'Menu');
-    this.addButton('levels', -0.295, -0.01, () => this.events.onLevels?.(), 'Levels');
+    // Two glass capsules float beside the mat, tilted to the player. The most
+    // used pair sits on the working hand's side; everything else lives in the
+    // menu (palm-up or the menu button).
+    this.capsules = [this.addCapsule(1), this.addCapsule(-1)];
+    this.addButton('hint', this.capsules[0], 0.031, () => this.hint(), 'Hint');
+    this.addButton('undo', this.capsules[0], -0.039, () => this.undo(), 'Undo');
+    this.addButton('levels', this.capsules[1], 0.031, () => this.events.onLevels?.(), 'Levels');
+    this.addButton('menu', this.capsules[1], -0.039, () => this.events.onMenu?.(), 'Menu');
+    for (const c of this.capsules) floatOverRoom(c.root);
 
     const ring = new RingGeometry(0.008, 0.011, 32);
     ring.rotateX(-Math.PI / 2);
@@ -216,10 +229,8 @@ export class FoldGame {
   }
 
   setLeftHanded(on: boolean) {
-    for (const b of this.buttons) {
-      const near = b.kind === 'undo' || b.kind === 'hint';
-      b.root.position.x = (near !== on ? 1 : -1) * 0.295;
-    }
+    this.placeCapsule(this.capsules[0], on ? -1 : 1);
+    this.placeCapsule(this.capsules[1], on ? 1 : -1);
   }
 
   setReduceMotion(on: boolean) {
@@ -232,15 +243,45 @@ export class FoldGame {
     this.board.setHighContrast(on);
   }
 
-  private addButton(kind: IconKind, x: number, y: number, action: () => void, label = '') {
-    const b = new Button(kind, () => {
-      if (this.inputLocked || this.drag || this.settle) return;
-      unlockAudio();
-      sfx.click();
-      action();
-    }, label);
-    b.root.position.set(x, 0, -y);
-    const e = this.world.createTransformEntity(b.root, this.boardEntity);
+  private placeCapsule(c: { root: Group }, side: number) {
+    c.root.position.set(side * CAPSULE_X, CAPSULE_Y, CAPSULE_Z);
+    c.root.rotation.set(CAPSULE_TILT, -side * 0.2, 0, 'YXZ');
+  }
+
+  private addCapsule(side: number): { root: Group; entity: Entity } {
+    const root = new Group();
+    root.name = 'Capsule';
+    const glass = new Surface({
+      w: CAPSULE_W,
+      h: CAPSULE_H,
+      ...CONTROL_GLASS,
+      shadow: 0.36,
+      soft: 0.026,
+      drop: 0.012,
+      order: LAYER.window,
+    });
+    root.add(glass.mesh);
+    const capsule = { root, entity: this.world.createTransformEntity(root, this.boardEntity) };
+    this.placeCapsule(capsule, side);
+    return capsule;
+  }
+
+  private addButton(kind: IconKind, capsule: { entity: Entity }, y: number, action: () => void, label: string) {
+    const b = new Button(
+      kind,
+      () => {
+        if (this.inputLocked || this.drag || this.settle) return;
+        unlockAudio();
+        sfx.click();
+        action();
+      },
+      label,
+      { plain: true, r: 0.022, labelSize: 0.0135 },
+    );
+    b.root.name = `Capsule_${kind}`;
+    b.root.position.set(0, y, 0.002);
+    b.root.rotation.x = Math.PI / 2;
+    const e = this.world.createTransformEntity(b.root, capsule.entity);
     e.addComponent(RayInteractable);
     e.addComponent(PokeInteractable);
     this.buttons.push(b);
@@ -784,6 +825,7 @@ export class FoldGame {
     dt = Math.min(dt, 0.1);
     this.time = time;
     for (const b of this.buttons) b.update(dt);
+    this.updateStage(dt);
     this.board.update(dt);
     this.updateGuide(dt);
     this.updateVanish(dt);
@@ -947,6 +989,26 @@ export class FoldGame {
   /** Paper facets in world space, for the creature reveal. */
   get facets(): readonly Facet[] {
     return this.paper.facets;
+  }
+
+  /** Clears the mat's controls and hints away for the opening, then fades them back. */
+  setStage(on: boolean) {
+    this.stageOn = on;
+    this.guide.root.visible = on && this.guide.root.visible;
+    this.board.setHintsVisible(on);
+  }
+  private stageOn = true;
+  private stageK = 1;
+  private stageShown = 1;
+
+  private updateStage(dt: number) {
+    this.stageK = follow(this.stageK, this.stageOn ? 1 : 0, this.stageOn ? 5 : 14, dt);
+    if (Math.abs(this.stageK - this.stageShown) < 0.004) return;
+    this.stageShown = this.stageK;
+    for (const c of this.capsules) {
+      c.root.visible = this.stageK > 0.01;
+      fadeTree(c.root, this.stageK * this.stageK);
+    }
   }
 
   hidePaper(hidden: boolean) {

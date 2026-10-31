@@ -5,7 +5,6 @@
  */
 
 import {
-  CanvasTexture,
   Color,
   Group,
   Mesh,
@@ -13,9 +12,9 @@ import {
   PlaneGeometry,
   Quaternion,
   SphereGeometry,
-  SRGBColorSpace,
   Vector3,
 } from '@iwsdk/core';
+import { fadeTree, floatOverRoom, follow, INK, LAYER, Surface, TextLabel, WINDOW_GLASS } from './glass.js';
 import { lineSide, V2 } from '../fold/geom.js';
 import { creaseLine, FoldSpec, PaperState, splitPaper } from '../fold/paper.js';
 import { stackHeights, facetGeometry, LAYER_GAP, BASE_HEIGHT } from './paper-view.js';
@@ -44,10 +43,11 @@ export class Guide {
   private grab: V2 = { x: 0, y: 0 };
   private q = new Quaternion();
   private v = new Vector3();
-  private caption: Mesh;
-  private captionCanvas: HTMLCanvasElement;
-  private captionTex: CanvasTexture;
-  private captionText = '';
+  private captionRoot = new Group();
+  private captionGlass: Surface;
+  private captionLabel: TextLabel;
+  private captionOn = false;
+  private captionK = 0;
 
   constructor() {
     this.root.name = 'Guide';
@@ -67,41 +67,23 @@ export class Guide {
     this.thumb.renderOrder = this.index.renderOrder = 62;
     this.root.add(this.thumb, this.index);
 
-    this.captionCanvas = document.createElement('canvas');
-    this.captionCanvas.width = 1024;
-    this.captionCanvas.height = 128;
-    this.captionTex = new CanvasTexture(this.captionCanvas);
-    this.captionTex.colorSpace = SRGBColorSpace;
-    this.caption = new Mesh(
-      new PlaneGeometry(0.36, 0.045),
-      new MeshBasicMaterial({ map: this.captionTex, transparent: true, depthWrite: false }),
-    );
-    // Stands at the far edge of the mat, leaning back towards the player.
-    this.caption.position.set(0.04, 0.05, -0.245);
-    this.caption.rotation.x = -0.45;
-    this.caption.renderOrder = 63;
-    this.root.add(this.caption);
+    this.captionGlass = new Surface({ w: 0.2, h: 0.038, ...WINDOW_GLASS, shadow: 0.3, soft: 0.018, drop: 0.006, order: LAYER.overlay });
+    this.captionLabel = new TextLabel(0.0265, 72, 500, INK.primary, LAYER.overlay + 1);
+    this.captionLabel.mesh.position.z = 0.0006;
+    this.captionRoot.add(this.captionGlass.mesh, this.captionLabel.mesh);
+    // Floats at the far edge of the mat, leaning back towards the player.
+    this.captionRoot.position.set(0.04, 0.052, -0.215);
+    this.captionRoot.rotation.x = -0.45;
+    floatOverRoom(this.captionRoot);
+    this.root.add(this.captionRoot);
     this.root.visible = false;
   }
 
   setCaption(text: string) {
-    if (text === this.captionText) return;
-    this.captionText = text;
-    const g = this.captionCanvas.getContext('2d')!;
-    g.clearRect(0, 0, 1024, 128);
-    if (text) {
-      g.font = '600 52px system-ui, -apple-system, Segoe UI, sans-serif';
-      const w = Math.min(1000, g.measureText(text).width + 80);
-      g.fillStyle = 'rgba(20,28,26,0.78)';
-      g.beginPath();
-      g.roundRect((1024 - w) / 2, 14, w, 100, 50);
-      g.fill();
-      g.fillStyle = '#fbf6ec';
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText(text, 512, 66);
-    }
-    this.captionTex.needsUpdate = true;
+    this.captionOn = text !== '';
+    if (!text) return;
+    this.captionLabel.set(text);
+    this.captionGlass.setSize(this.captionLabel.width + 0.03, 0.038);
   }
 
   /** Starts demonstrating `fold` on `paper`; returns false if it is not a valid fold. */
@@ -157,11 +139,13 @@ export class Guide {
   }
 
   update(dt: number) {
+    this.captionK = follow(this.captionK, this.captionOn ? 1 : 0, this.captionOn ? 9 : 14, dt);
+    this.captionRoot.visible = this.captionK > 0.01;
+    fadeTree(this.captionRoot, this.captionK * this.captionK);
     this.fade = Math.max(0, Math.min(1, this.fade + (this.active ? dt * 3 : -dt * 4)));
     if (this.fade <= 0) {
-      this.root.visible = this.captionText !== '';
+      this.root.visible = this.captionRoot.visible;
       this.flapPivot.visible = this.crease.visible = this.thumb.visible = this.index.visible = false;
-      (this.caption.material as MeshBasicMaterial).opacity = 1;
       return;
     }
     this.root.visible = true;

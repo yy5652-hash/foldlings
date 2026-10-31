@@ -1,31 +1,41 @@
 /**
- * A gold paper medallion that pops up over the mat when a badge is earned,
- * one at a time if several arrive together.
+ * A glass notification that floats up over the mat when a badge is earned, one
+ * at a time if several arrive together.
  */
 
-import { CanvasTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace } from '@iwsdk/core';
+import { CanvasTexture, Group } from '@iwsdk/core';
+import { contentTexture, drawIcon, follow, INK, LAYER, setFont, Surface, WINDOW_GLASS } from './glass.js';
 import { sfx } from './sfx.js';
 
-const SHOW = 2.8;
+const SHOW = 3;
+const W = 0.2;
+const H = 0.052;
 
 export class BadgePop {
   readonly root = new Group();
   private canvas = document.createElement('canvas');
   private tex: CanvasTexture;
-  private mat: MeshBasicMaterial;
+  private surface: Surface;
   private queue: string[] = [];
   private t = -1;
+  private k = 0;
 
   constructor() {
     this.root.name = 'BadgePop';
-    this.canvas.width = 512;
-    this.canvas.height = 256;
-    this.tex = new CanvasTexture(this.canvas);
-    this.tex.colorSpace = SRGBColorSpace;
-    this.mat = new MeshBasicMaterial({ map: this.tex, transparent: true, depthWrite: false });
-    const m = new Mesh(new PlaneGeometry(0.22, 0.11), this.mat);
-    m.renderOrder = 95;
-    this.root.add(m);
+    this.canvas.width = 800;
+    this.canvas.height = Math.round((800 * H) / W);
+    this.tex = contentTexture(this.canvas);
+    this.surface = new Surface({
+      w: W,
+      h: H,
+      ...WINDOW_GLASS,
+      shadow: 0.36,
+      soft: 0.024,
+      drop: 0.008,
+      map: this.tex,
+      order: LAYER.overlay,
+    });
+    this.root.add(this.surface.mesh);
     this.root.visible = false;
   }
 
@@ -42,38 +52,27 @@ export class BadgePop {
       this.root.visible = false;
       return;
     }
-    const g = this.canvas.getContext('2d')!;
-    g.clearRect(0, 0, 512, 256);
-    g.fillStyle = 'rgba(246,239,226,0.97)';
-    g.beginPath();
-    g.roundRect(6, 30, 500, 196, 98);
-    g.fill();
-    // Gold medallion with a star.
-    const grad = g.createRadialGradient(120, 128, 10, 120, 128, 86);
-    grad.addColorStop(0, '#ffe08a');
-    grad.addColorStop(1, '#d99a00');
+    const c = this.canvas;
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, c.width, c.height);
+    const cy = c.height / 2;
+    const grad = g.createRadialGradient(cy, cy, 4, cy, cy, cy * 0.8);
+    grad.addColorStop(0, 'rgba(255,209,102,0.6)');
+    grad.addColorStop(1, 'rgba(255,209,102,0)');
     g.fillStyle = grad;
-    g.beginPath();
-    g.arc(120, 128, 82, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = '#fff6d8';
-    g.beginPath();
-    for (let i = 0; i < 10; i++) {
-      const a = -Math.PI / 2 + (i * Math.PI) / 5;
-      const r = i % 2 ? 22 : 52;
-      g.lineTo(120 + Math.cos(a) * r, 128 + Math.sin(a) * r);
-    }
-    g.closePath();
-    g.fill();
+    g.fillRect(0, 0, cy * 2, c.height);
+    drawIcon(g, 'star', cy, cy, 74, INK.gold, 1.6, true);
     g.textAlign = 'left';
-    g.fillStyle = '#b0795a';
-    g.font = '600 26px system-ui, -apple-system, Segoe UI, sans-serif';
-    g.fillText('BADGE EARNED', 226, 108);
-    g.fillStyle = '#2f4a45';
-    g.font = '700 44px Georgia, "Times New Roman", serif';
-    g.fillText(title, 226, 162);
+    g.textBaseline = 'middle';
+    g.fillStyle = INK.secondary;
+    setFont(g, 30, 500);
+    g.fillText('Badge earned', cy * 2 - 10, cy - 28);
+    g.fillStyle = INK.primary;
+    setFont(g, 46, 700, -0.4);
+    g.fillText(title, cy * 2 - 10, cy + 20, c.width - cy * 2 - 20);
     this.tex.needsUpdate = true;
     this.t = 0;
+    this.k = 0;
     this.root.visible = true;
     sfx.badge();
   }
@@ -81,10 +80,11 @@ export class BadgePop {
   update(dt: number) {
     if (this.t < 0) return;
     this.t += dt;
-    const k = Math.min(1, this.t / 0.35);
-    const pop = this.t < 0.35 ? 1 + Math.sin(k * Math.PI) * 0.25 : 1;
-    this.root.scale.setScalar(Math.max(0.01, k) * pop);
-    this.mat.opacity = this.t > SHOW - 0.4 ? Math.max(0, (SHOW - this.t) / 0.4) : 1;
+    const leaving = this.t > SHOW - 0.3;
+    this.k = follow(this.k, leaving ? 0 : 1, leaving ? 18 : 9, dt);
+    this.root.scale.setScalar(0.94 + 0.06 * this.k);
+    this.surface.mesh.position.y = (1 - this.k) * -0.012;
+    this.surface.fade = this.k * this.k;
     if (this.t > SHOW) this.next();
   }
 }

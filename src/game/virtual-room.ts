@@ -193,6 +193,7 @@ export function makeDesk(): Group {
   g.name = 'Desk';
   const wood = new MeshLambertMaterial({ color: new Color(0x8a5f3c) });
   const top = new Mesh(new BoxGeometry(1.0, 0.035, 0.62), wood);
+  top.receiveShadow = true;
   top.position.y = -0.02;
   g.add(top);
   const legGeo = new BoxGeometry(0.045, 1, 0.045);

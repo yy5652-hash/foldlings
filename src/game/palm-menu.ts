@@ -1,24 +1,13 @@
 /**
- * The menu. Turn your menu-hand palm towards your face and a paper token
- * appears above it; touch it with the other index finger to open a panel that
- * stays where it opened (it never follows the wrist). The mat's menu token
- * opens the same panel for rays, gaze and the mouse.
+ * The menu. Turn your menu-hand palm towards your face and a glass token
+ * appears above it; touch it with the other index finger and a small home view
+ * of round buttons floats up where it stays (it never follows the wrist). The
+ * mat's menu button opens the same view for rays, gaze and the mouse.
  */
 
-import {
-  CanvasTexture,
-  Group,
-  Matrix4,
-  Mesh,
-  MeshBasicMaterial,
-  PlaneGeometry,
-  PokeInteractable,
-  RayInteractable,
-  SRGBColorSpace,
-  Vector3,
-  World,
-} from '@iwsdk/core';
+import { Matrix4, Vector3, World } from '@iwsdk/core';
 import { Button, IconKind } from './button.js';
+import { GlassWindow } from './glass.js';
 import type { Hands } from './hands.js';
 import { sfx } from './sfx.js';
 
@@ -28,42 +17,21 @@ export interface MenuItem {
   run: () => void;
 }
 
-const COLS = 3;
-const CELL_X = 0.082;
-const CELL_Y = 0.09;
+/** A honeycomb, as on the visionOS home view: 4 over 3. */
+const ROW_LEN = 4;
+const CELL_X = 0.086;
+const CELL_Y = 0.092;
+const R = 0.03;
 const UP = new Vector3(0, 1, 0);
 /** Seconds the palm must face the player before the token shows. */
 const PALM_HOLD = 0.3;
 const AUTO_CLOSE = 12;
 
-function backing(w: number, h: number): Mesh {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = Math.round((512 * h) / w);
-  const g = c.getContext('2d')!;
-  g.fillStyle = 'rgba(30,46,42,0.94)';
-  g.beginPath();
-  g.roundRect(4, 4, c.width - 8, c.height - 8, 36);
-  g.fill();
-  g.strokeStyle = 'rgba(246,240,228,0.35)';
-  g.lineWidth = 4;
-  g.stroke();
-  const t = new CanvasTexture(c);
-  t.colorSpace = SRGBColorSpace;
-  const m = new Mesh(new PlaneGeometry(w, h), new MeshBasicMaterial({ map: t, transparent: true }));
-  // Drawn first so the token labels in front of it stay visible.
-  m.renderOrder = -5;
-  m.name = 'MenuBacking';
-  return m;
-}
-
 export class PalmMenu {
-  readonly panel = new Group();
+  private win: GlassWindow;
   private buttons: Button[] = [];
   private token: Button;
-  private unfold = 0;
-  private wantOpen = false;
-  private idle = 0;
+  private openedAt = -1;
   private palm = 0;
   private tokenOn = 0;
   private lastToggle = -1;
@@ -75,7 +43,6 @@ export class PalmMenu {
   /** True while the player is folding: no token, and the panel closes. */
   blocked = false;
   private head = new Vector3();
-  private fwd = new Vector3();
   private wrist = new Vector3();
   private idx = new Vector3();
   private pinky = new Vector3();
@@ -91,35 +58,35 @@ export class PalmMenu {
     private world: World,
     items: MenuItem[],
   ) {
-    this.panel.name = 'MenuPanel';
-    const rows = Math.ceil(items.length / COLS);
-    const w = COLS * CELL_X + 0.03;
-    const h = rows * CELL_Y + 0.02;
-    this.panel.add(backing(w, h));
-    const pe = world.createTransformEntity(this.panel);
+    const rows = Math.ceil(items.length / ROW_LEN);
+    this.win = new GlassWindow(world, {
+      name: 'MenuPanel',
+      w: ROW_LEN * CELL_X + 0.03,
+      h: rows * CELL_Y + 0.03,
+      glass: false,
+      autoClose: AUTO_CLOSE,
+    });
     items.forEach((item, i) => {
       const b = new Button(
         item.icon,
         () => {
           // Ignore a fingertip that was already passing through as it opened.
-          if (this.unfold < 0.9 || this.idle < 0.4) return;
+          if (!this.win.ready || this.clock - this.openedAt < 0.4) return;
           sfx.click();
           this.close();
           item.run();
         },
         item.label,
+        { r: R, labelSize: 0.018 },
       );
-      const col = i % COLS;
-      const row = Math.floor(i / COLS);
-      b.root.position.set((col - (COLS - 1) / 2) * CELL_X, (rows - 1) / 2 * CELL_Y - row * CELL_Y + 0.012, 0.004);
+      const row = Math.floor(i / ROW_LEN);
+      const inRow = Math.min(ROW_LEN, items.length - row * ROW_LEN);
+      const col = i - row * ROW_LEN;
+      b.root.position.set((col - (inRow - 1) / 2) * CELL_X, ((rows - 1) / 2 - row) * CELL_Y + 0.008, 0.004);
       b.root.rotation.x = Math.PI / 2;
-      const e = world.createTransformEntity(b.root, pe);
-      e.addComponent(RayInteractable);
-      e.addComponent(PokeInteractable);
+      this.win.addControl(b.root, b);
       this.buttons.push(b);
     });
-    this.panel.visible = false;
-    this.panel.position.set(0, -50, 0);
 
     this.token = new Button('menu', () => this.toggle());
     this.token.root.name = 'PalmToken';
@@ -129,36 +96,30 @@ export class PalmMenu {
     world.onXRFrame((frame) => this.onXRFrame(frame));
   }
 
+  get panel() {
+    return this.win.root;
+  }
+
   get isOpen(): boolean {
-    return this.wantOpen;
+    return this.win.isOpen;
   }
 
   toggle() {
     if (this.clock - this.lastToggle < 0.6) return;
     this.lastToggle = this.clock;
-    if (this.wantOpen) this.close();
+    if (this.win.isOpen) this.close();
     else this.open();
   }
 
-  /** Opens the panel in front of the player, where it then stays. */
+  /** Opens at chest height and a forearm away, above the mat where hands work. */
   open() {
-    this.world.camera.getWorldPosition(this.head);
-    this.world.camera.getWorldDirection(this.fwd);
-    this.fwd.y = 0;
-    if (this.fwd.lengthSq() < 1e-4) this.fwd.set(0, 0, -1);
-    this.fwd.normalize();
-    // At chest height and a forearm away, above the mat where hands work.
-    this.panel.position.copy(this.head).addScaledVector(this.fwd, 0.45);
-    this.panel.position.y -= 0.1;
-    this.panel.lookAt(this.head);
-    this.panel.visible = true;
-    this.wantOpen = true;
-    this.idle = 0;
+    this.win.open(0.45, 0.1);
+    this.openedAt = this.clock;
     sfx.pick();
   }
 
   close() {
-    this.wantOpen = false;
+    this.win.close();
   }
 
   private palmFacing = false;
@@ -225,22 +186,10 @@ export class PalmMenu {
 
   update(dt: number, inXR: boolean) {
     this.clock += dt;
-    this.unfold += ((this.wantOpen ? 1 : 0) - this.unfold) * Math.min(1, dt * 12);
-    if (this.wantOpen) {
-      this.idle += dt;
-      if (this.idle > AUTO_CLOSE) this.close();
-    }
-    this.panel.scale.set(1, Math.max(0.02, this.unfold), 1);
-    if (!this.wantOpen && this.unfold < 0.03 && this.panel.visible) {
-      // Park it far away so a hidden panel never catches rays.
-      this.panel.visible = false;
-      this.panel.position.set(0, -50, 0);
-    }
-    for (const b of this.buttons) b.update(dt);
-
-    if (this.blocked && this.wantOpen) this.close();
+    this.win.update(dt);
+    if (this.blocked && this.win.isOpen) this.close();
     this.palm = inXR && this.palmFacing && !this.blocked ? this.palm + dt : Math.max(0, this.palm - dt * 3);
-    const on = this.palm > PALM_HOLD && !this.wantOpen ? 1 : 0;
+    const on = this.palm > PALM_HOLD && !this.win.isOpen ? 1 : 0;
     this.tokenOn += (on - this.tokenOn) * Math.min(1, dt * 10);
     this.token.root.visible = this.tokenOn > 0.05;
     this.token.root.scale.setScalar(0.62 * this.tokenOn);

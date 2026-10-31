@@ -5,6 +5,7 @@
  */
 
 import {
+  NeutralToneMapping,
   Color,
   createSystem,
   DirectionalLight,
@@ -24,6 +25,8 @@ import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, st
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
+import { HandBodies } from './hand-bodies.js';
+import { Dimmer } from './dimmer.js';
 import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
 import { ResultAction, ResultCard } from './result-card.js';
@@ -119,6 +122,11 @@ export class GameSystem extends createSystem({
   /** The level the result card is about, for Retry. */
   private lastLevel: Level | null = null;
   private ear = new Vector3();
+  /** The warm key light; it follows the mat so its shadow box stays on it. */
+  private key = new DirectionalLight(new Color(0xffe8cc), 2.2);
+  /** Back-left of the mat in its own frame, so shadows fall towards the player. */
+  private keyOffset = new Vector3(-0.75, 1.05, -0.55);
+  private keyTmp = new Vector3();
   private menu!: PalmMenu;
   private album!: Album;
   private settingsPanel!: SettingsPanel;
@@ -130,6 +138,10 @@ export class GameSystem extends createSystem({
   private occluderKey = '';
   private occluderCheck = 0;
   private title = new TitleCard();
+  private dimmer = new Dimmer();
+  private handBodies!: HandBodies;
+  /** Film capture: the emulator has no real hands to see through passthrough. */
+  private alwaysGhostHands = false;
   private titleShown = false;
   private earFwd = new Vector3();
   private galleryItems: Creature[] = [];
@@ -143,10 +155,23 @@ export class GameSystem extends createSystem({
 
   init(): void {
     // Soft room light for the mat, buttons and creatures.
-    const hemi = new HemisphereLight(new Color(0xfff4e6), new Color(0x6b5a4a), 1.6);
-    const sun = new DirectionalLight(new Color(0xffffff), 1.4);
-    sun.position.set(0.6, 2, 0.8);
-    this.world.scene.add(hemi, sun);
+    // Soft studio light: a warm window key that casts the only shadows (a
+    // tight box around the mat), a cool fill, and a low sky/ground bounce;
+    // the scene's gradient environment does the rest.
+    const hemi = new HemisphereLight(new Color(0xfff1e0), new Color(0x5a4a3c), 0.55);
+    this.key.castShadow = true;
+    this.key.shadow.mapSize.set(1024, 1024);
+    const cam = this.key.shadow.camera;
+    cam.left = cam.bottom = -0.6;
+    cam.right = cam.top = 0.6;
+    cam.near = 0.1;
+    cam.far = 3;
+    this.key.shadow.bias = -0.0004;
+    this.key.shadow.normalBias = 0.008;
+    this.key.shadow.radius = 4;
+    const fill = new DirectionalLight(new Color(0xcfdcff), 0.35);
+    fill.position.set(-1.2, 1.4, -0.4);
+    this.world.scene.add(hemi, this.key, this.key.target, fill);
 
     try {
       const p = JSON.parse(safeGet(PROGRESS_KEY) ?? 'null') as Progress | null;
@@ -237,6 +262,13 @@ export class GameSystem extends createSystem({
     this.menu.hands = this.hands;
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
+    this.game.boardRoot.add(this.title.paper);
+    this.title.onGathered = () => {
+      this.game.hidePaper(false);
+      this.game.setStage(true);
+    };
+    this.world.scene.add(this.dimmer.mesh);
+    this.handBodies = new HandBodies(this.world);
     if (this.progress.muted) {
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
@@ -295,6 +327,13 @@ export class GameSystem extends createSystem({
         },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
         hands: () => this.hands,
+        ghostHands: (on: boolean) => {
+          this.alwaysGhostHands = on;
+          this.handBodies.setGhost(on || this.mode === 'vr');
+        },
+        resultPreview: () =>
+          this.resultCard.show('Crane', 'Paper world', { stars: 3, folds: 3, par: 3, hinted: false, perfect: true } as never, undefined),
+        badgePreview: (t = 'First fold') => this.badge.show(t),
         settings: () => this.settingsPanel,
         occluders: () => this.occluders.root.children.length,
         gallery: () => {
@@ -339,12 +378,23 @@ export class GameSystem extends createSystem({
     });
   }
 
+  /** The room lowers its lights a little while paper comes to life. */
+  private heroDim(): number {
+    const c = this.celebrate;
+    return c && !this.settings.reduceMotion && c.t < c.nextAt ? 0.34 : 0;
+  }
+
   private setMode(mode: 'desktop' | 'ar' | 'vr') {
     this.mode = mode;
+    // Keeps the paper's colours as saturated as they were printed.
+    this.world.renderer.toneMapping = NeutralToneMapping;
+    this.world.renderer.toneMappingExposure = 1;
+    this.handBodies?.setGhost(mode === 'vr' || this.alwaysGhostHands);
     this.zoo.realRoom = mode === 'ar';
     const virtual = mode !== 'ar';
     this.vroom.root.visible = virtual;
     this.desk.visible = virtual;
+    this.game.board.setShadowCatcher(!virtual);
     if (virtual) this.zoo.setSurfaces(this.vroom.surfaces());
   }
 
@@ -637,7 +687,7 @@ export class GameSystem extends createSystem({
           c.worldDone = w;
           let s = 0;
           for (const l of LEVELS) if (l.world === w) s += this.progress.best[l.id]?.stars ?? 0;
-          lines.push(`${WORLDS[w].name} world complete!  ★ ${s} / ${PER_WORLD * 3}`);
+          lines.push(`${WORLDS[w].name} world complete, ${s} of ${PER_WORLD * 3} stars`);
         }
         for (let k = 0; k < WORLDS.length; k++) {
           if (!worldOpen(k, before) && worldOpen(k, after)) lines.push(`${WORLDS[k].name} world unlocked`);
@@ -772,9 +822,16 @@ export class GameSystem extends createSystem({
       this.game.boardRoot.updateWorldMatrix(true, false);
       this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
       this.title.root.lookAt(this.world.camera.getWorldPosition(this.ear));
-      this.title.play();
+      this.game.hidePaper(true);
+      this.game.setStage(false);
+      this.title.play(this.game.level.look.front);
     }
     this.title.update(delta);
+    this.handBodies.update(delta);
+    this.dimmer.update(delta, this.mode === 'ar' ? Math.max(this.title.dim * 0.62, this.heroDim()) : 0, this.world.camera);
+    this.game.boardRoot.getWorldPosition(this.key.target.position);
+    this.keyTmp.copy(this.keyOffset).applyQuaternion(this.game.boardRoot.quaternion);
+    this.key.position.copy(this.key.target.position).add(this.keyTmp);
     this.hands.update(delta);
     this.occluderCheck -= delta;
     if (this.occluderCheck <= 0) {
@@ -789,6 +846,10 @@ export class GameSystem extends createSystem({
     this.badge.update(delta);
     this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
+    this.game.board.setCardAway(
+      this.title.playing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
+      delta,
+    );
     this.world.camera.getWorldPosition(this.ear);
     Creature.viewer.copy(this.ear);
     this.world.camera.getWorldDirection(this.earFwd);

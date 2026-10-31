@@ -222,5 +222,5 @@ export default async function ({ page, frame, cdp, signal }) {
   });
   if (b64) writeFileSync(join(dir, 'audio.webm'), Buffer.from(b64, 'base64'));
   writeFileSync(join(dir, 'marks.json'), JSON.stringify({ marks, ms: Date.now() - t0 }, null, 1));
-  return { frames: count, seconds: (Date.now() - t0) / 1000, marks: marks.length, results: results.filter(Boolean).slice(0, 8) };
+  return { frames: count, seconds: (Date.now() - t0) / 1000, marks: marks.length, results: results.filter(Boolean).slice(0, 60) };
 }

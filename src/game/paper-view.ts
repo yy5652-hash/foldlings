@@ -6,64 +6,93 @@
 import {
   BufferGeometry,
   Color,
+  DataTexture,
   DoubleSide,
   Float32BufferAttribute,
   Group,
+  LinearMipmapLinearFilter,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   Quaternion,
-  ShaderMaterial,
+  RepeatWrapping,
+  Vector2,
   Vector3,
 } from '@iwsdk/core';
 import { applyAffine, clipConvex, Line, polygonArea, reflectPoint, V2 } from '../fold/geom.js';
 import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
+import { fiberHeight, heightToNormal, normalTexture } from './normal-maps.js';
 import type { PaperTextures } from './paper-texture.js';
 
 export const LAYER_GAP = 0.0006;
 export const BASE_HEIGHT = 0.0012;
 
-const vertex = /* glsl */ `
-varying vec2 vUv;
-varying vec3 vNormalW;
-void main() {
-  vUv = uv;
-  vNormalW = normalize(mat3(modelMatrix) * normal);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}`;
+let fibers: DataTexture | null = null;
 
-const fragment = /* glsl */ `
-uniform sampler2D frontMap;
-uniform sampler2D backMap;
-uniform float flipped;
-uniform float glow;
-uniform vec3 lightDir;
-varying vec2 vUv;
-varying vec3 vNormalW;
-void main() {
-  bool facingUp = gl_FrontFacing;
-  bool showFront = facingUp != (flipped > 0.5);
-  vec3 n = facingUp ? vNormalW : -vNormalW;
-  vec3 base = showFront ? texture2D(frontMap, vUv).rgb : texture2D(backMap, vUv).rgb;
-  float diff = max(dot(normalize(n), lightDir), 0.0);
-  vec3 col = base * (0.66 + 0.42 * diff);
-  col += glow * vec3(0.20, 0.17, 0.08);
-  gl_FragColor = vec4(col, 1.0);
-  #include <colorspace_fragment>
-}`;
+/** Fine washi fibre, shared by every sheet. */
+function fiberNormals(): DataTexture {
+  if (!fibers) {
+    const size = 512;
+    fibers = normalTexture(heightToNormal(fiberHeight(size, 7), size, 1.6), size);
+    fibers.wrapS = fibers.wrapT = RepeatWrapping;
+    fibers.anisotropy = 4;
+    fibers.generateMipmaps = true;
+    fibers.minFilter = LinearMipmapLinearFilter;
+    fibers.needsUpdate = true;
+  }
+  return fibers;
+}
 
-function makePaperMaterial(tex: PaperTextures, flipped: boolean): ShaderMaterial {
-  return new ShaderMaterial({
-    vertexShader: vertex,
-    fragmentShader: fragment,
+/**
+ * Physical paper: lit by the room, shadowed by its own flaps, with fibre in the
+ * surface and a little light coming through it when it is backlit. The two
+ * printed sides are chosen per fragment from which way the facet faces.
+ */
+function makePaperMaterial(tex: PaperTextures, flipped: boolean): MeshStandardMaterial {
+  const m = new MeshStandardMaterial({
     side: DoubleSide,
-    uniforms: {
-      frontMap: { value: tex.front },
-      backMap: { value: tex.back },
-      flipped: { value: flipped ? 1 : 0 },
-      glow: { value: 0 },
-      lightDir: { value: new Vector3(0.3, 1, 0.45).normalize() },
-    },
+    roughness: 0.86,
+    metalness: 0,
+    normalMap: fiberNormals(),
+    normalScale: new Vector2(0.55, 0.55),
+    envMapIntensity: 0.9,
   });
+  m.shadowSide = DoubleSide;
+  const glow = { value: 0 };
+  m.userData.glow = glow;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.frontMap = { value: tex.front };
+    shader.uniforms.backMap = { value: tex.back };
+    shader.uniforms.flipped = { value: flipped ? 1 : 0 };
+    shader.uniforms.glow = glow;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vPaperUv;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvPaperUv = uv;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform sampler2D frontMap;
+        uniform sampler2D backMap;
+        uniform float flipped;
+        uniform float glow;
+        varying vec2 vPaperUv;`,
+      )
+      .replace(
+        '#include <map_fragment>',
+        `bool paperFront = gl_FrontFacing != (flipped > 0.5);
+        diffuseColor.rgb *= paperFront ? texture2D(frontMap, vPaperUv).rgb : texture2D(backMap, vPaperUv).rgb;`,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        // Light through the sheet, then the warm lift of a fold about to solve.
+        totalEmissiveRadiance += diffuseColor.rgb * (0.1 + 0.1 * (1.0 - abs(dot(normal, normalize(vViewPosition)))));
+        totalEmissiveRadiance += glow * vec3(0.2, 0.17, 0.08);`,
+      );
+  };
+  m.customProgramCacheKey = () => 'foldlings-paper';
+  return m;
 }
 
 /** Two convex polygons overlap with positive area. */
@@ -139,8 +168,8 @@ export class PaperView {
   private stack = new Group();
   private flapPivot = new Group();
   private flapInner = new Group();
-  private matFront: ShaderMaterial;
-  private matBack: ShaderMaterial;
+  private matFront: MeshStandardMaterial;
+  private matBack: MeshStandardMaterial;
   private edgeMat = new MeshBasicMaterial({
     color: new Color(0x2a2118),
     transparent: true,
@@ -169,8 +198,8 @@ export class PaperView {
   }
 
   setGlow(v: number) {
-    this.matFront.uniforms.glow.value = v;
-    this.matBack.uniforms.glow.value = v;
+    this.matFront.userData.glow.value = v;
+    this.matBack.userData.glow.value = v;
   }
 
   /** Static paper, no flap. */
@@ -240,6 +269,7 @@ export class PaperView {
       const y = BASE_HEIGHT + heights[i] * LAYER_GAP + lift;
       const mesh = new Mesh(facetGeometry(f, y), f.flipped ? this.matBack : this.matFront);
       mesh.renderOrder = 2 + heights[i];
+      mesh.castShadow = true;
       group.add(mesh);
       if (!edges) return;
       // A slightly larger dark underlay gives every layer a crisp edge.
