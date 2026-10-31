@@ -4,7 +4,7 @@
  */
 
 import { CanvasTexture, Group } from '@iwsdk/core';
-import { contentTexture, drawIcon, follow, INK, LAYER, setFont, Surface, WINDOW_GLASS } from './glass.js';
+import { contentTexture, DISPLAY, drawIcon, follow, INK, LAYER, setFont, Surface, WINDOW_GLASS } from './glass.js';
 import { sfx } from './sfx.js';
 
 const SHOW = 3;
@@ -28,6 +28,8 @@ export class BadgePop {
     this.surface = new Surface({
       w: W,
       h: H,
+      r: 0.003,
+      cut: 0.01,
       ...WINDOW_GLASS,
       shadow: 0.36,
       soft: 0.024,
@@ -65,11 +67,11 @@ export class BadgePop {
     g.textAlign = 'left';
     g.textBaseline = 'middle';
     g.fillStyle = INK.secondary;
-    setFont(g, 30, 500);
-    g.fillText('Badge earned', cy * 2 - 10, cy - 28);
+    setFont(g, 26, 500, 2);
+    g.fillText('BADGE EARNED', cy * 2 - 10, cy - 28);
     g.fillStyle = INK.primary;
-    setFont(g, 46, 700, -0.4);
-    g.fillText(title, cy * 2 - 10, cy + 20, c.width - cy * 2 - 20);
+    setFont(g, 34, 400, 1, DISPLAY);
+    g.fillText(title.toUpperCase(), cy * 2 - 10, cy + 20, c.width - cy * 2 - 20);
     this.tex.needsUpdate = true;
     this.t = 0;
     this.k = 0;

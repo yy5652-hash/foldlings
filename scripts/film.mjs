@@ -136,7 +136,7 @@ export default async function ({ page, frame, cdp, signal }) {
     rec.start();
   });
   const t0 = Date.now();
-  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: width, maxHeight: height, everyNthFrame: 1 });
+  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: shot.quality ?? 92, maxWidth: width, maxHeight: height, everyNthFrame: 1 });
   const marks = [];
   const results = [];
   // {"fold": {...}} pinches and folds the next solution step with one hand.

@@ -1,4 +1,6 @@
 import '@fontsource-variable/inter/opsz.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
+import '@fontsource/michroma/400.css';
 import { SessionMode, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { fontsReady } from './game/glass.js';

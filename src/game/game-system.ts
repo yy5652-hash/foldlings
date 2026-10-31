@@ -19,12 +19,15 @@ import {
 } from '@iwsdk/core';
 import { FoldSpec, paperBounds } from '../fold/paper.js';
 import { Creature } from './creatures.js';
+import type { Rig } from './creature-models.js';
 import { FoldGame } from './fold-game.js';
-import { customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
+import { CreatureKind, customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic } from './sfx.js';
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
+import { HoloStage } from './holo-stage.js';
+import { tickHolo } from './holo.js';
 import { QualityGuard } from './quality.js';
 import { HandBodies } from './hand-bodies.js';
 import { Dimmer } from './dimmer.js';
@@ -81,6 +84,9 @@ interface Progress {
   daily?: number[];
   muted?: boolean;
 }
+
+/** How far the real room stays dimmed while the projection is running. */
+const THEATRE_DIM = 0.62;
 
 export class GameSystem extends createSystem({
   planes: { required: [XRPlane] },
@@ -140,6 +146,8 @@ export class GameSystem extends createSystem({
   private occluderCheck = 0;
   private title = new TitleCard();
   private dimmer = new Dimmer();
+  private stage!: HoloStage;
+  private demo: { c: Creature; t: number } | null = null;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
@@ -161,7 +169,7 @@ export class GameSystem extends createSystem({
     // tight box around the mat), a cool fill, and a low sky/ground bounce;
     // the scene's gradient environment does the rest.
     const hemi = new HemisphereLight(new Color(0xfff1e0), new Color(0x5a4a3c), 0.55);
-    this.key.castShadow = true;
+    this.key.castShadow = false;
     this.key.shadow.mapSize.set(1024, 1024);
     const cam = this.key.shadow.camera;
     cam.left = cam.bottom = -0.6;
@@ -266,9 +274,15 @@ export class GameSystem extends createSystem({
     this.world.createTransformEntity(this.title.root);
     this.game.boardRoot.add(this.title.paper);
     this.title.onGathered = () => this.game.hidePaper(false);
-    this.title.onFinished = () => this.game.setStage(true);
+    this.title.onFinished = () => {
+      this.game.setStage(true);
+      this.stage.dismiss();
+    };
     this.world.scene.add(this.dimmer.mesh);
     this.handBodies = new HandBodies(this.world);
+    this.stage = new HoloStage(this.world);
+    this.game.boardRoot.add(this.stage.root);
+    this.world.scene.add(this.stage.labels);
     if (this.progress.muted) {
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
@@ -327,6 +341,14 @@ export class GameSystem extends createSystem({
         },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
         hands: () => this.hands,
+        holoDemo: (kind: CreatureKind = 'crane') => this.showDemo(kind),
+        holoDemoEnd: () => {
+          this.demo?.c.root.removeFromParent();
+          this.demo = null;
+          this.stage.dismiss();
+          this.game.hidePaper(false);
+          this.game.setStage(true);
+        },
         replayTitle: () => {
           this.titleShown = false;
         },
@@ -402,20 +424,102 @@ export class GameSystem extends createSystem({
     });
   }
 
+  /** Labels, slice and vitals around a creature on the projection table. */
+  private updatePresentation(dt: number) {
+    const p = this.zoo.presentation();
+    if (p && p.c !== this.presented) {
+      this.presented = p.c;
+      this.beatIn = 0;
+      p.c.setPresenting(true);
+      this.stage.present(0.05, 0.36);
+      this.stage.showTrace(3);
+      const c = this.celebrate;
+      const [head, a, b, d] = p.c.anchors;
+      const where = c
+        ? c.level.world >= 0
+          ? `${WORLDS[c.level.world].name.toUpperCase()} WORLD ${c.level.slot + 1}/${PER_WORLD}`
+          : c.level.name.toUpperCase()
+        : '';
+      this.stage.setCallout(0, head, [0, 0, 0], 0.19, 0.07, p.c.kind.toUpperCase(), where);
+      if (c) {
+        this.stage.setCallout(1, a, [0, 0, 0], 0.19, -0.03, `FOLDS ${c.result.folds} PAR ${c.result.par}`, `${c.result.stars} OF 3 STARS`);
+      }
+      this.stage.setCallout(2, b, [0, 0, 0], -0.19, 0.05, `${p.c.facets} FACETS`, `${this.game.paper.facets.length} PANELS IN THE SHEET`);
+      this.stage.setCallout(3, d, [0, 0, 0], -0.19, -0.05, 'VITALS', 'FORMING');
+    }
+    if (p) {
+      p.c.setScan(this.stage.scanY);
+      // Pulled apart once, mid-turn, to show how it is made.
+      const e = Math.sin(Math.min(1, Math.max(0, (p.left - 0.9) / 2.2)) * Math.PI);
+      p.c.setExplode(0.013 * e * e);
+      this.stage.setAwake(p.awake);
+      if (p.awake) {
+        if (!this.wasAwake) this.stage.setCallout(3, p.c.anchors[3], [0, 0, 0], -0.19, -0.05, 'VITALS', 'AWAKE');
+        this.beatIn -= dt;
+        if (this.beatIn <= 0 && p.left > 0.8) {
+          this.beatIn = 1 / 0.9;
+          sfx.beep();
+        }
+      }
+      this.wasAwake = p.awake;
+      if (p.left < 0.8) this.stage.dismiss();
+    } else if (this.presented) {
+      this.presented.setPresenting(false);
+      this.presented = null;
+      this.wasAwake = false;
+      this.stage.dismiss();
+    }
+  }
+  private presented: Creature | null = null;
+  private wasAwake = false;
+  private beatIn = 0;
+
+  /** The look frame: one creature, large, under the full projection. */
+  private showDemo(kind: CreatureKind) {
+    if (this.demo) {
+      this.demo.c.root.removeFromParent();
+    }
+    const i = WORLDS.findIndex((w) => w.kind === kind);
+    const c = new Creature(kind, LOOKS[Math.max(0, i * 10) % LOOKS.length]);
+    c.root.scale.setScalar(1.35);
+    c.root.position.set(0, 0.17, -0.02);
+    this.game.boardRoot.add(c.root);
+    this.game.hidePaper(true);
+    this.game.setStage(false);
+    const rig = (c as unknown as { rig: Rig }).rig;
+    for (const core of rig.cores) core.visible = true;
+    this.demo = { c, t: 0 };
+    this.stage.present(0.05, 0.36);
+    const body = c.root;
+    this.stage.setCallout(0, body, [0, 0.14, 0], 0.2, 0.05, kind.toUpperCase(), 'SPECIMEN 014');
+    this.stage.setCallout(1, body, [0.07, 0.02, 0], 0.2, -0.05, 'FACETS 46', 'FOLDS 3  PAR 3');
+    this.stage.setCallout(2, body, [-0.07, 0.04, 0], -0.2, 0.0, 'CORE', 'INNER STRUCTURE');
+  }
+
+  private updateDemo(dt: number) {
+    const d = this.demo;
+    if (!d) return;
+    d.t += dt;
+    d.c.update(dt);
+    d.c.root.rotation.y = d.t * 0.3;
+    const rig = (d.c as unknown as { rig: Rig }).rig;
+    const e = 0.5 - 0.5 * Math.cos(d.t * 0.4);
+    rig.holo.uniforms.uExplode.value = 0.016 * e * e;
+    rig.holo.uniforms.uScanY.value = this.stage.scanY;
+    rig.core.uniforms.uScanY.value = this.stage.scanY;
+  }
+
   /** Gives up the costliest extras if a headset cannot hold its frame rate. */
   private lowerQuality() {
     if (this.quality.level === 1) this.world.renderer.xr.setFoveation(1);
-    if (this.quality.level === 2) {
-      this.key.castShadow = false;
-      this.game.board.setShadowCatcher(false);
-    }
+    if (this.quality.level === 2) this.stage.lowPower = true;
     console.info(`[foldlings] quality step ${this.quality.level}`);
   }
 
   /** The room lowers its lights a little while paper comes to life. */
   private heroDim(): number {
     const c = this.celebrate;
-    return c && !this.settings.reduceMotion && c.t < c.nextAt ? 0.34 : 0;
+    return c && !this.settings.reduceMotion && c.t < c.nextAt ? 0.8 : 0;
   }
 
   private setMode(mode: 'desktop' | 'ar' | 'vr') {
@@ -429,9 +533,9 @@ export class GameSystem extends createSystem({
     this.vroom.root.visible = virtual;
     this.desk.visible = virtual;
     // Dusk light from the study's window; a neutral lamp over a real table.
-    this.key.color.set(virtual ? 0xffc089 : 0xffe8cc);
-    this.key.intensity = virtual ? 2.7 : 2.2;
-    this.game.board.setShadowCatcher(!virtual && this.quality.level < 2);
+    this.key.color.set(0xbfe6ff);
+    this.key.intensity = virtual ? 1.6 : 1.2;
+    this.game.board.setShadowCatcher(false);
     if (virtual) this.zoo.setSurfaces(this.vroom.surfaces());
   }
 
@@ -702,7 +806,7 @@ export class GameSystem extends createSystem({
       // Speak once it has folded itself up and is about to set off.
       c.where = where;
       c.sayAt = c.t + prelude;
-      c.nextAt = c.t + prelude + 0.5;
+      c.nextAt = c.t + prelude + 2.0;
       if (this.game.isDaily) {
         const days = new Set(this.progress.daily ?? []);
         days.add(dayNumber());
@@ -861,13 +965,19 @@ export class GameSystem extends createSystem({
       this.title.root.lookAt(this.world.camera.getWorldPosition(this.ear));
       this.game.hidePaper(true);
       this.game.setStage(false);
+      this.stage.present(0.05, 0.3);
+      sfx.power();
       this.title.play(this.game.level.look.front);
     }
     this.title.update(delta);
     this.handBodies.update(delta);
     this.vroom.update(delta);
     if (this.world.renderer.xr.isPresenting && this.quality.update(delta)) this.lowerQuality();
-    this.dimmer.update(delta, this.mode === 'ar' ? Math.max(this.title.dim * 0.62, this.heroDim()) : 0, this.world.camera);
+    this.dimmer.update(delta, this.mode === 'ar' ? Math.max(this.settings.dimRoom ? THEATRE_DIM : 0, this.title.dim * 0.86, this.heroDim(), this.demo ? 0.84 : 0) : 0, this.world.camera);
+    tickHolo(delta);
+    this.stage.update(delta);
+    this.updateDemo(delta);
+    this.updatePresentation(delta);
     this.game.boardRoot.getWorldPosition(this.key.target.position);
     this.keyTmp.copy(this.keyOffset).applyQuaternion(this.game.boardRoot.quaternion);
     this.key.position.copy(this.key.target.position).add(this.keyTmp);
@@ -886,7 +996,7 @@ export class GameSystem extends createSystem({
     this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
     this.game.board.setCardAway(
-      this.title.playing || !!this.celebrate || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
+      this.title.playing || !!this.celebrate || !!this.demo || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
       delta,
     );
     this.world.camera.getWorldPosition(this.ear);

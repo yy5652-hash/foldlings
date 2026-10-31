@@ -4,7 +4,7 @@
  * their own voice, and can fold themselves up out of a flat sheet.
  */
 
-import { Color, Euler, Group, LineSegments, Mesh, Quaternion, Vector3 } from '@iwsdk/core';
+import { Color, Euler, Group, LineSegments, Mesh, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
 import { buildRig, type Rig } from './creature-models.js';
 import type { CreatureKind } from './levels.js';
 import type { PaperLook } from './paper-texture.js';
@@ -26,15 +26,15 @@ export const HABITAT: Record<CreatureKind, Habitat> = {
 /** Seconds per fold-up beat; the body opens on beat 0, parts on 1–3. */
 export const FOLD_BEAT = 0.36;
 
-const INK = new Color(0x2a2420);
-const GOLD = new Color(0xffd166);
+const INK = new Color(0x9fe9ff);
+const GOLD = new Color(0xffffff);
 const easeBack = (x: number) => {
   const c = 1.9;
   return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2);
 };
 
 /** Crease lines show only within this distance of the viewer. */
-const DETAIL_RANGE = 1.1;
+const DETAIL_RANGE = 1.7;
 
 export class Creature {
   /** The viewer's head, updated each frame by the game. */
@@ -152,7 +152,7 @@ export class Creature {
     }
     this.flash = Math.max(0, this.flash - dt * 2.4);
     const lines = this.rig.lines;
-    lines.opacity = 0.3 + this.flash * 0.7;
+    lines.opacity = 0.6 + this.flash * 0.4;
     lines.color.lerpColors(INK, GOLD, this.flash);
     if (this.foldT >= 0) {
       this.foldT += dt;
@@ -278,7 +278,51 @@ export class Creature {
     }
   }
 
+  /** Shows the inner layer while the creature is on the projection table. */
+  setPresenting(on: boolean) {
+    for (const c of this.rig.cores) c.visible = on;
+    if (!on) {
+      this.setExplode(0);
+      this.setScan(-99);
+    }
+  }
+
+  /** Metres the facets stand apart, for the exploded view. */
+  setExplode(k: number) {
+    this.rig.holo.uniforms.uExplode.value = k;
+    this.rig.core.uniforms.uExplode.value = -0.006 + k * 0.55;
+  }
+
+  /** World height of the slice passing through the body. */
+  setScan(y: number) {
+    this.rig.holo.uniforms.uScanY.value = y;
+    this.rig.core.uniforms.uScanY.value = y;
+  }
+
+  /** World height the body has formed up to; anything high means all of it. */
+  setForming(y: number) {
+    this.rig.holo.uniforms.uReveal.value = y;
+    this.rig.core.uniforms.uReveal.value = y;
+  }
+
+  /** How many flat faces the model is made of. */
+  get facets(): number {
+    let n = 0;
+    this.root.traverse((o) => {
+      if ((o as Mesh).isMesh && o.name === 'Paper') n += (o as Mesh).geometry.attributes.position.count / 3;
+    });
+    return n;
+  }
+
+  /** Points on the body for labels to be tied to. */
+  get anchors(): Object3D[] {
+    const r = this.rig;
+    return [r.head ?? r.body, r.wingR ?? r.tail ?? r.earR ?? r.body, r.wingL ?? r.legL ?? r.earL ?? r.body, r.tail ?? r.legR ?? r.body];
+  }
+
   dispose() {
+    this.rig.holo.dispose();
+    this.rig.core.dispose();
     this.root.traverse((o) => {
       if ((o as Mesh).isMesh && o.name === 'Paper') (o as Mesh).geometry.dispose();
       if ((o as LineSegments).isLineSegments) (o as LineSegments).geometry.dispose();

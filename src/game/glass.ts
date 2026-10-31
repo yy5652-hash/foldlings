@@ -1,8 +1,7 @@
 /**
- * The spatial interface kit: floating glass surfaces, type and motion, in the
- * manner of visionOS. Passthrough pixels cannot be read, so the glass is a
- * translucent scrim with a lit rim, a specular lobe that moves with your head
- * and a soft shadow, rather than a real blur.
+ * The projected interface: panes of light with cut corners, burning edges and
+ * instrument type, floating where you opened them. Passthrough pixels cannot be
+ * read, so a pane is a dark scrim with light drawn over it, not a real blur.
  *
  * Every surface is one quad and one draw call: the rounded shape, shadow and
  * content texture are all resolved in one shader, composited in display space
@@ -27,21 +26,25 @@ import {
   Vector3,
   World,
 } from '@iwsdk/core';
+import { HOLO_TIME } from './holo.js';
 import { ICON_PATHS, IconKind } from './icon-paths.js';
 
 export type { IconKind };
 
-export const SANS = '"Inter Variable", -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif';
+/** Instrument readouts, and all the small type. */
+export const MONO = '"JetBrains Mono Variable", ui-monospace, Menlo, monospace';
+/** Names and titles, wide and engineered. */
+export const DISPLAY = '"Michroma", "JetBrains Mono Variable", system-ui, sans-serif';
 
-/** White at three levels, which is how visionOS sets text on glass. */
+/** Light at three levels, plus amber for what has been earned. */
 export const INK = {
-  primary: 'rgba(255,255,255,0.98)',
-  secondary: 'rgba(255,255,255,0.68)',
-  tertiary: 'rgba(255,255,255,0.42)',
-  gold: '#ffd166',
-  /** Soft white fill of a section on a window. */
-  section: 'rgba(255,255,255,0.075)',
-  sectionHover: 'rgba(255,255,255,0.14)',
+  primary: 'rgba(226,250,255,0.98)',
+  secondary: 'rgba(150,225,250,0.82)',
+  tertiary: 'rgba(120,200,235,0.5)',
+  gold: '#ffc266',
+  /** Soft fill of a section on a window. */
+  section: 'rgba(70,190,240,0.09)',
+  sectionHover: 'rgba(90,210,255,0.18)',
 };
 
 /** Draw layers: windows, then what sits on them, then what floats over them. */
@@ -80,6 +83,9 @@ uniform vec2 uHoverP;
 uniform float uSpot;
 uniform float uFill;
 uniform vec3 uFillTint;
+uniform float uCut;
+uniform float uChrome;
+uniform float uTime;
 varying vec2 vP;
 varying vec3 vView;
 varying vec3 vN;
@@ -92,6 +98,8 @@ float box(vec2 p, vec2 b, float r) {
 
 void main() {
   float d = box(vP, uHalf, uR);
+  // Cut corners, for panes rather than pills.
+  if (uCut > 0.0) d = max(d, (abs(vP.x) + abs(vP.y) - (uHalf.x + uHalf.y - uCut)) * 0.7071);
   float aa = max(fwidth(d), 1e-5);
   float shape = 1.0 - smoothstep(-aa, aa, d);
 
@@ -102,7 +110,9 @@ void main() {
   float fres = pow(1.0 - abs(dot(N, V)), 3.0);
 
   float up = clamp(vP.y / uHalf.y * 0.5 + 0.5, 0.0, 1.0);
-  vec3 col = uTint + vec3(0.085) * up * up;
+  vec3 col = uTint + vec3(0.0, 0.05, 0.075) * up * up;
+  // Fine raster lines across the projected surface.
+  col += vec3(0.0, 0.028, 0.04) * (0.5 + 0.5 * sin(vP.y * 2600.0));
   float a = uBody;
 
   float sheen = uSheen * uBody;
@@ -111,7 +121,7 @@ void main() {
 
   // A soft light that follows the finger, ray or gaze across the surface.
   float spot = uHover * smoothstep(uSpot, 0.0, length(vP - uHoverP));
-  col += vec3(0.5) * spot;
+  col += vec3(0.1, 0.5, 0.65) * spot;
   a += spot * 0.22;
   a = clamp(a, 0.0, 1.0);
 
@@ -130,10 +140,21 @@ void main() {
   if (uRim > 0.0) {
     float rimW = 0.0011;
     float rim = (smoothstep(-rimW - aa, -rimW + aa, d)) * shape;
-    float lit = mix(0.14, 0.85, smoothstep(-0.8, 0.9, vP.y / uHalf.y - vP.x / uHalf.x * 0.25));
-    rim *= clamp(lit * uRim + uHover * 0.25, 0.0, 1.0);
-    pm = pm * (1.0 - rim) + vec3(rim);
-    pa = pa * (1.0 - rim) + rim;
+    float lit = mix(0.3, 0.75, smoothstep(-0.8, 0.9, vP.y / uHalf.y - vP.x / uHalf.x * 0.25));
+    // Corners burn brightest, like the brackets of an instrument readout.
+    vec2 toCorner = uHalf - abs(vP);
+    float bracket = step(toCorner.x, 0.022) * step(toCorner.y, 0.022);
+    rim *= clamp((lit + bracket) * uRim + uHover * 0.35, 0.0, 1.0);
+    pm = pm * (1.0 - rim) + vec3(0.5, 0.92, 1.0) * rim;
+    pa = pa * (1.0 - rim) + rim * 0.5;
+  }
+
+  if (uChrome > 0.0) {
+    // An inner keyline, a ruler along the foot, and a slow sweep of light.
+    float inner = 1.0 - smoothstep(0.0, 0.0004 + aa, abs(d + 0.0062));
+    float tick = step(fract(vP.x * 100.0), 0.14) * step(abs(vP.y + uHalf.y - 0.0036), 0.0015);
+    float sweep = pow(fract(vP.y * 1.6 - uTime * 0.13), 42.0);
+    pm += vec3(0.32, 0.8, 1.0) * (inner * 0.2 + tick * 0.45 + sweep * 0.1) * shape * uChrome;
   }
 
   if (uUseMap > 0.5) {
@@ -192,12 +213,16 @@ export interface SurfaceOptions {
   drop?: number;
   map?: Texture | null;
   order?: number;
+  /** Size of the cut corners, in metres. */
+  cut?: number;
+  /** Draws the pane's keyline and ruler. */
+  chrome?: boolean;
 }
 
 /** The standard dark glass used by windows. */
-export const WINDOW_GLASS = { tint: [0.1, 0.105, 0.125] as [number, number, number], body: 0.66, rim: 1, sheen: 1 };
+export const WINDOW_GLASS = { tint: [0.012, 0.05, 0.075] as [number, number, number], body: 0.74, rim: 1, sheen: 0.7 };
 /** The thinner glass of a control floating on its own. */
-export const CONTROL_GLASS = { tint: [0.14, 0.145, 0.165] as [number, number, number], body: 0.6, rim: 0.9, sheen: 1 };
+export const CONTROL_GLASS = { tint: [0.02, 0.085, 0.12] as [number, number, number], body: 0.66, rim: 1, sheen: 0.7 };
 
 /** One rounded, lit, shadowed quad. Its local XY plane faces +Z. */
 export class Surface {
@@ -236,6 +261,9 @@ export class Surface {
         uSpot: { value: Math.max(opts.w, opts.h) * 0.7 },
         uFill: { value: 0 },
         uFillTint: { value: new Vector3(1, 1, 1) },
+        uCut: { value: opts.cut ?? 0 },
+        uChrome: { value: opts.chrome ? 1 : 0 },
+        uTime: HOLO_TIME,
       },
     });
     this.mesh = new Mesh(UNIT_QUAD, this.material);
@@ -297,8 +325,8 @@ export function contentTexture(c: HTMLCanvasElement): CanvasTexture {
   return t;
 }
 
-export function setFont(g: CanvasRenderingContext2D, px: number, weight = 500, tracking = 0) {
-  g.font = `${weight} ${px}px ${SANS}`;
+export function setFont(g: CanvasRenderingContext2D, px: number, weight = 500, tracking = 0, family = MONO) {
+  g.font = `${weight} ${px}px ${family}`;
   g.letterSpacing = `${tracking}px`;
   g.fontKerning = 'normal';
   g.textRendering = 'geometricPrecision';
@@ -361,6 +389,7 @@ export class TextLabel {
     private weight = 500,
     private color: string = INK.primary,
     order = LAYER.text,
+    private family = MONO,
   ) {
     this.canvas.width = 8;
     this.canvas.height = Math.ceil(px * 1.5);
@@ -381,7 +410,7 @@ export class TextLabel {
     this.text = text;
     this.style = color;
     let g = this.canvas.getContext('2d')!;
-    setFont(g, this.px, this.weight);
+    setFont(g, this.px, this.weight, 0, this.family);
     const w = Math.max(8, Math.ceil(g.measureText(text).width) + 12);
     if (this.canvas.width !== w) {
       this.canvas.width = w;
@@ -389,7 +418,7 @@ export class TextLabel {
       g = this.canvas.getContext('2d')!;
     }
     g.clearRect(0, 0, w, this.canvas.height);
-    setFont(g, this.px, this.weight);
+    setFont(g, this.px, this.weight, 0, this.family);
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillStyle = color;
@@ -524,7 +553,7 @@ export class GlassWindow {
     this.autoClose = opts.autoClose ?? 30;
     this.root.name = opts.name;
     this.root.add(this.content);
-    const r = opts.r ?? 0.03;
+    const r = opts.r ?? 0.004;
     if (this.px) {
       this.canvas = document.createElement('canvas');
       this.canvas.width = this.px;
@@ -536,7 +565,9 @@ export class GlassWindow {
     this.surface = new Surface({
       w: opts.w,
       h: opts.h,
-      r,
+      r: 0.004,
+      cut: glass ? 0.018 : 0,
+      chrome: glass,
       ...WINDOW_GLASS,
       body: glass ? WINDOW_GLASS.body : 0,
       rim: glass ? 1 : 0,
@@ -753,7 +784,7 @@ export class Toggle implements Ticking {
     const span = (this.trackW - this.h) / 2;
     this.knob.mesh.position.x = (this.x.x * 2 - 1) * span;
     const k = this.tint;
-    this.track.setBody(0.2 + 0.8 * k, [1 - 0.81 * k, 1 - 0.18 * k, 1 - 0.65 * k]);
+    this.track.setBody(0.2 + 0.8 * k, [0.3 - 0.1 * k, 0.5 + 0.28 * k, 0.65 + 0.35 * k]);
   }
 
   update(dt: number) {
@@ -767,7 +798,10 @@ export class Toggle implements Ticking {
 export function fontsReady(): Promise<unknown> {
   const fonts = document.fonts;
   return Promise.race([
-    Promise.all([fonts.load(`500 40px "Inter Variable"`), fonts.load(`700 40px "Inter Variable"`)]),
+    Promise.all([
+      fonts.load(`500 40px "JetBrains Mono Variable"`),
+      fonts.load(`400 40px "Michroma"`),
+    ]),
     new Promise((resolve) => setTimeout(resolve, 2500)),
   ]);
 }

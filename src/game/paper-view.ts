@@ -4,96 +4,25 @@
  */
 
 import {
+  AdditiveBlending,
   BufferGeometry,
   Color,
-  DataTexture,
   DoubleSide,
   Float32BufferAttribute,
   Group,
-  LinearMipmapLinearFilter,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   Quaternion,
-  RepeatWrapping,
-  Vector2,
+  ShaderMaterial,
   Vector3,
 } from '@iwsdk/core';
 import { applyAffine, clipConvex, Line, polygonArea, reflectPoint, V2 } from '../fold/geom.js';
 import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
-import { fiberHeight, heightToNormal, normalTexture } from './normal-maps.js';
+import { holoSheet } from './holo.js';
 import type { PaperTextures } from './paper-texture.js';
 
 export const LAYER_GAP = 0.0006;
 export const BASE_HEIGHT = 0.0012;
-
-let fibers: DataTexture | null = null;
-
-/** Fine washi fibre, shared by every sheet. */
-function fiberNormals(): DataTexture {
-  if (!fibers) {
-    const size = 512;
-    fibers = normalTexture(heightToNormal(fiberHeight(size, 7), size, 1.6), size);
-    fibers.wrapS = fibers.wrapT = RepeatWrapping;
-    fibers.anisotropy = 4;
-    fibers.generateMipmaps = true;
-    fibers.minFilter = LinearMipmapLinearFilter;
-    fibers.needsUpdate = true;
-  }
-  return fibers;
-}
-
-/**
- * Physical paper: lit by the room, shadowed by its own flaps, with fibre in the
- * surface and a little light coming through it when it is backlit. The two
- * printed sides are chosen per fragment from which way the facet faces.
- */
-function makePaperMaterial(tex: PaperTextures, flipped: boolean): MeshStandardMaterial {
-  const m = new MeshStandardMaterial({
-    side: DoubleSide,
-    roughness: 0.86,
-    metalness: 0,
-    normalMap: fiberNormals(),
-    normalScale: new Vector2(0.55, 0.55),
-    envMapIntensity: 0.9,
-  });
-  m.shadowSide = DoubleSide;
-  const glow = { value: 0 };
-  m.userData.glow = glow;
-  m.onBeforeCompile = (shader) => {
-    shader.uniforms.frontMap = { value: tex.front };
-    shader.uniforms.backMap = { value: tex.back };
-    shader.uniforms.flipped = { value: flipped ? 1 : 0 };
-    shader.uniforms.glow = glow;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vPaperUv;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvPaperUv = uv;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        '#include <common>',
-        `#include <common>
-        uniform sampler2D frontMap;
-        uniform sampler2D backMap;
-        uniform float flipped;
-        uniform float glow;
-        varying vec2 vPaperUv;`,
-      )
-      .replace(
-        '#include <map_fragment>',
-        `bool paperFront = gl_FrontFacing != (flipped > 0.5);
-        diffuseColor.rgb *= paperFront ? texture2D(frontMap, vPaperUv).rgb : texture2D(backMap, vPaperUv).rgb;`,
-      )
-      .replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-        // Light through the sheet, then the warm lift of a fold about to solve.
-        totalEmissiveRadiance += diffuseColor.rgb * (0.1 + 0.1 * (1.0 - abs(dot(normal, normalize(vViewPosition)))));
-        totalEmissiveRadiance += glow * vec3(0.2, 0.17, 0.08);`,
-      );
-  };
-  m.customProgramCacheKey = () => 'foldlings-paper';
-  return m;
-}
 
 /** Two convex polygons overlap with positive area. */
 function overlaps(a: V2[], b: V2[]): boolean {
@@ -168,19 +97,24 @@ export class PaperView {
   private stack = new Group();
   private flapPivot = new Group();
   private flapInner = new Group();
-  private matFront: MeshStandardMaterial;
-  private matBack: MeshStandardMaterial;
+  private matFront: ShaderMaterial;
+  private matBack: ShaderMaterial;
+  /** A slightly larger sheet of light under each facet burns as its outline. */
   private edgeMat = new MeshBasicMaterial({
-    color: new Color(0x2a2118),
+    color: new Color(0xbdf2ff),
     transparent: true,
-    opacity: 0.28,
+    opacity: 0.85,
     depthWrite: false,
+    blending: AdditiveBlending,
+    toneMapped: false,
   });
   /** Darkens where the flap will land, deepening as it lifts. */
   private landing = new Group();
   private landMat = new MeshBasicMaterial({
-    color: new Color(0x1a1410),
+    color: new Color(0xffa24a),
     transparent: true,
+    blending: AdditiveBlending,
+    toneMapped: false,
     opacity: 0,
     depthWrite: false,
     side: DoubleSide,
@@ -191,15 +125,15 @@ export class PaperView {
 
   constructor(textures: PaperTextures) {
     this.root.name = 'Paper';
-    this.matFront = makePaperMaterial(textures, false);
-    this.matBack = makePaperMaterial(textures, true);
+    this.matFront = holoSheet(textures.front, textures.back, false);
+    this.matBack = holoSheet(textures.front, textures.back, true);
     this.root.add(this.stack, this.landing, this.flapPivot);
     this.flapPivot.add(this.flapInner);
   }
 
   setGlow(v: number) {
-    this.matFront.userData.glow.value = v;
-    this.matBack.userData.glow.value = v;
+    this.matFront.uniforms.glow.value = v;
+    this.matBack.uniforms.glow.value = v;
   }
 
   /** Static paper, no flap. */
@@ -269,7 +203,6 @@ export class PaperView {
       const y = BASE_HEIGHT + heights[i] * LAYER_GAP + lift;
       const mesh = new Mesh(facetGeometry(f, y), f.flipped ? this.matBack : this.matFront);
       mesh.renderOrder = 2 + heights[i];
-      mesh.castShadow = true;
       group.add(mesh);
       if (!edges) return;
       // A slightly larger dark underlay gives every layer a crisp edge.

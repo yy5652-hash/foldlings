@@ -151,6 +151,17 @@ export function setListener(pos: { x: number; y: number; z: number }, fwd: { x: 
 const BEAT_NOTES = [392.0, 523.25, 659.25, 783.99, 1046.5];
 
 export const sfx = {
+  /** A monitor's soft beep. */
+  beep() {
+    tone(1046.5, 0.09, 0.07, 0, 'sine');
+  },
+  /** The projector coming up. */
+  power() {
+    tone(82, 1.6, 0.16, 0, 'sine');
+    tone(164, 1.3, 0.05, 0.25, 'triangle');
+    tone(1318, 0.5, 0.025, 0.7, 'sine');
+    tone(1976, 0.6, 0.02, 0.9, 'sine');
+  },
   pick() {
     rustle(0.12, 2600, 1.2, 0.18);
   },
@@ -312,19 +323,20 @@ function pluck(freq: number, when: number, gain: number) {
   const a = audio();
   if (!a || !musicBus) return;
   const o = a.createOscillator();
-  o.type = 'triangle';
+  o.type = 'sine';
   o.frequency.value = freq;
   const lp = a.createBiquadFilter();
   lp.type = 'lowpass';
-  lp.frequency.setValueAtTime(2400, when);
-  lp.frequency.exponentialRampToValueAtTime(500, when + 1.2);
+  lp.frequency.setValueAtTime(1800, when);
+  lp.frequency.exponentialRampToValueAtTime(420, when + 2.4);
   const g = a.createGain();
   g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(gain, when + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + 2.2);
+  // A slow swell rather than a pluck: instruments breathing in a dark room.
+  g.gain.exponentialRampToValueAtTime(gain, when + 0.7);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 4.2);
   o.connect(lp).connect(g).connect(musicBus);
   o.start(when);
-  o.stop(when + 2.4);
+  o.stop(when + 4.4);
 }
 
 /** Soft generative koto-like notes with an echo; very quiet. */

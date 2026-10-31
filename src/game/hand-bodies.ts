@@ -6,17 +6,23 @@
  */
 
 import {
+  AdditiveBlending,
+  BufferGeometry,
   CapsuleGeometry,
+  Float32BufferAttribute,
   FrontSide,
   InstancedMesh,
+  LineSegments,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
   Quaternion,
+  SphereGeometry,
   Vector3,
   World,
 } from '@iwsdk/core';
+import { holoLine } from './holo.js';
 
 const FINGERS = ['index-finger', 'middle-finger', 'ring-finger', 'pinky-finger'];
 const JOINTS: XRHandJoint[] = [
@@ -73,9 +79,9 @@ function frostedGlass(): MeshStandardMaterial {
   m.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <opaque_fragment>',
-      `float handRim = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 2.0);
-      outgoingLight += vec3(0.5) * handRim;
-      diffuseColor.a = mix(0.5, 1.0, handRim);
+      `float handRim = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 1.8);
+      outgoingLight = vec3(0.16, 0.62, 0.86) * (0.2 + 1.7 * handRim);
+      diffuseColor.a = 0.16 + 0.6 * handRim;
       #include <opaque_fragment>`,
     );
   };
@@ -84,6 +90,10 @@ function frostedGlass(): MeshStandardMaterial {
 
 export class HandBodies {
   private mesh: InstancedMesh;
+  /** The tracked skeleton, drawn over the hand as light. */
+  private joints: InstancedMesh;
+  private bones: LineSegments<BufferGeometry>;
+  private bonePos = new Float32Array(MAX * 6);
   private ghost = false;
   private frosted = frostedGlass();
   private sdkFill: Mesh[] = [];
@@ -106,7 +116,22 @@ export class HandBodies {
     this.mesh.frustumCulled = false;
     this.mesh.raycast = () => {};
     this.mesh.renderOrder = -10;
-    world.scene.add(this.mesh);
+    this.joints = new InstancedMesh(
+      new SphereGeometry(0.0034, 8, 6),
+      new MeshBasicMaterial({ color: 0xbdf2ff, transparent: true, depthWrite: false, blending: AdditiveBlending, toneMapped: false }),
+      JOINTS.length * 2,
+    );
+    this.joints.count = 0;
+    this.joints.frustumCulled = false;
+    this.joints.renderOrder = 130;
+    this.joints.raycast = () => {};
+    const bg = new BufferGeometry();
+    bg.setAttribute('position', new Float32BufferAttribute(this.bonePos, 3));
+    this.bones = new LineSegments(bg, holoLine(0x62d6ff, 0.8));
+    this.bones.frustumCulled = false;
+    this.bones.renderOrder = 130;
+    this.bones.raycast = () => {};
+    world.scene.add(this.mesh, this.joints, this.bones);
     world.onXRFrame((frame) => this.onXRFrame(frame));
   }
 
@@ -152,12 +177,13 @@ export class HandBodies {
   }
 
   private onXRFrame(frame: XRFrame) {
-    if (this.ghost) return;
     const ref = this.world.renderer.xr.getReferenceSpace();
     if (!ref) return;
     this.world.player.updateWorldMatrix(true, false);
     this.player.copy(this.world.player.matrixWorld);
     let n = 0;
+    let jn = 0;
+    let bn = 0;
     for (const src of frame.session.inputSources) {
       if (!src.hand) continue;
       let ok = true;
@@ -173,13 +199,30 @@ export class HandBodies {
         this.rad[i] = pose.radius ?? FALLBACK_RADIUS;
       }
       if (!ok) continue;
+      for (let i = 0; i < JOINTS.length; i++) {
+        this.m.makeTranslation(this.pos[i].x, this.pos[i].y, this.pos[i].z);
+        if (jn < JOINTS.length * 2) this.joints.setMatrixAt(jn++, this.m);
+      }
       for (const [a, b] of LINKS) {
         if (n >= MAX) break;
         this.write(n++, a, b);
+        const pa = this.pos[a];
+        const pb = this.pos[b];
+        this.bonePos[bn++] = pa.x;
+        this.bonePos[bn++] = pa.y;
+        this.bonePos[bn++] = pa.z;
+        this.bonePos[bn++] = pb.x;
+        this.bonePos[bn++] = pb.y;
+        this.bonePos[bn++] = pb.z;
       }
     }
     this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;
+    this.joints.count = this.hidden ? 0 : jn;
+    this.joints.instanceMatrix.needsUpdate = true;
+    this.bonePos.fill(0, bn);
+    this.bones.visible = !this.hidden;
+    this.bones.geometry.attributes.position.needsUpdate = true;
   }
 
   private write(index: number, a: number, b: number) {

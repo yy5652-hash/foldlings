@@ -32,17 +32,17 @@ export interface Level {
   par: number;
 }
 
-const BACK = '#f6f0e4';
 
+/** False colours, as on a scan: the two sides of a sheet always differ in hue. */
 export const LOOKS: PaperLook[] = [
-  { front: '#e2574c', motif: 'waves', ink: '#fff3e8', back: BACK },
-  { front: '#3f9a6e', motif: 'dots', ink: '#e9ffe9', back: BACK },
-  { front: '#e8923a', motif: 'stripes', ink: '#fff0d6', back: BACK },
-  { front: '#3d79c2', motif: 'waves', ink: '#e4f1ff', back: BACK },
-  { front: '#c75c9a', motif: 'dots', ink: '#ffe6f6', back: BACK },
-  { front: '#3a8d97', motif: 'checks', ink: '#e8fbff', back: BACK },
-  { front: '#d9b23a', motif: 'stripes', ink: '#fff8de', back: BACK },
-  { front: '#5b5fb0', motif: 'waves', ink: '#ecebff', back: BACK },
+  { front: '#2fd2ff', motif: 'waves', ink: '#d9f7ff', back: '#ffb25a' },
+  { front: '#2dffb0', motif: 'dots', ink: '#dcfff2', back: '#8a9bff' },
+  { front: '#ffb25a', motif: 'stripes', ink: '#fff0d6', back: '#2fd2ff' },
+  { front: '#4f9dff', motif: 'waves', ink: '#e4f1ff', back: '#ffb25a' },
+  { front: '#ff5fc8', motif: 'dots', ink: '#ffe6f6', back: '#6fe4ff' },
+  { front: '#27e4d2', motif: 'checks', ink: '#e8fbff', back: '#ffa05a' },
+  { front: '#ffe04d', motif: 'stripes', ink: '#fff8de', back: '#4f9dff' },
+  { front: '#a07bff', motif: 'waves', ink: '#ecebff', back: '#3dffc0' },
 ];
 
 /** Parses "d-2- a2+" style fold lists (family, offset, moving side). */

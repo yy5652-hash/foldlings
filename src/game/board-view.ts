@@ -12,27 +12,22 @@ import {
   Float32BufferAttribute,
   Group,
   LineBasicMaterial,
-  LinearMipmapLinearFilter,
   LineSegments,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   PlaneGeometry,
-  RepeatWrapping,
   RingGeometry,
   ShadowMaterial,
   Shape,
   ShapeGeometry,
   SRGBColorSpace,
-  Vector2,
   Vector3,
 } from '@iwsdk/core';
 import { Line, unionOutline } from '../fold/geom.js';
 import { BOARD, Facet, GRID } from '../fold/paper.js';
 import { buildRig } from './creature-models.js';
 import type { CreatureKind } from './levels.js';
-import { contentTexture, fadeTree, floatOverRoom, follow, INK, LAYER, setFont, Surface, WINDOW_GLASS } from './glass.js';
-import { feltHeight, heightToNormal, normalTexture } from './normal-maps.js';
+import { contentTexture, DISPLAY, fadeTree, floatOverRoom, follow, INK, LAYER, MONO, setFont, Surface, TextLabel, WINDOW_GLASS } from './glass.js';
 import type { PaperLook } from './paper-texture.js';
 
 const DOT_USED = new Color(0xffffff);
@@ -160,7 +155,7 @@ export class BoardView {
   private catcher!: Mesh;
   private highContrast = false;
   private goalFacets: readonly Facet[] = [];
-  private creaseColor = 0xfff6d8;
+  private creaseColor = 0xff7a45;
   /** Hint step 1: a pulsing ring on the corner to pinch. */
   private hintRing: Mesh;
   /** Hint step 2: the crease to fold along. */
@@ -170,7 +165,8 @@ export class BoardView {
   private creaseMat: MeshBasicMaterial;
   private outline: Mesh;
   private outlineMat = new MeshBasicMaterial({
-    color: 0xffffff,
+    color: 0xbdf2ff,
+    toneMapped: false,
     transparent: true,
     opacity: 0.8,
     depthTest: false,
@@ -181,48 +177,73 @@ export class BoardView {
   constructor() {
     this.root.name = 'Board';
 
-    // Felt mat; the texture spans the whole mat.
-    const [matCanvas, matTex] = canvasTexture(1024, 1024);
+    // A dark plate etched with the lattice; the texture spans the whole mat.
+    const [matCanvas, matTex] = canvasTexture(2048, 2048);
     const m = matCanvas.getContext('2d')!;
-    const base = m.createRadialGradient(512, 470, 120, 512, 512, 760);
-    base.addColorStop(0, '#3a3d43');
-    base.addColorStop(1, '#2a2c31');
+    const base = m.createRadialGradient(1024, 1000, 200, 1024, 1024, 1500);
+    base.addColorStop(0, '#0a1a24');
+    base.addColorStop(1, '#040a10');
     m.fillStyle = base;
-    m.fillRect(0, 0, 1024, 1024);
+    m.fillRect(0, 0, 2048, 2048);
     const matPx = (x: number, y: number): [number, number] => [
-      (x / MAT_W + 0.5) * 1024,
-      (0.5 - y / MAT_D) * 1024,
+      (x / MAT_W + 0.5) * 2048,
+      (0.5 - y / MAT_D) * 2048,
     ];
-    // Lattice dots every GRID metres show where creases can land.
-    m.fillStyle = 'rgba(255,255,255,0.3)';
+    // Fine rule across the plate.
+    m.strokeStyle = 'rgba(90,200,255,0.07)';
+    m.lineWidth = 1.5;
+    for (let i = 0; i <= 2048; i += 40) {
+      m.beginPath();
+      m.moveTo(i, 0);
+      m.lineTo(i, 2048);
+      m.moveTo(0, i);
+      m.lineTo(2048, i);
+      m.stroke();
+    }
+    // A small cross at every point where a crease can land.
+    m.strokeStyle = 'rgba(150,235,255,0.75)';
+    m.lineWidth = 2.5;
     for (let x = BOARD.minX + GRID; x < BOARD.maxX - 1e-9; x += GRID) {
       for (let y = BOARD.minY + GRID; y < BOARD.maxY - 1e-9; y += GRID) {
         const [px, py] = matPx(x, y);
         m.beginPath();
-        m.ellipse(px, py, 2.6 * (MAT_D / MAT_W), 2.6, 0, 0, Math.PI * 2);
-        m.fill();
+        m.moveTo(px - 9, py);
+        m.lineTo(px + 9, py);
+        m.moveTo(px, py - 9);
+        m.lineTo(px, py + 9);
+        m.stroke();
       }
     }
+    // Rulers down the long edges, in real centimetres.
+    m.fillStyle = 'rgba(150,230,255,0.75)';
+    setFont(m, 22, 500, 1, MONO);
+    m.textBaseline = 'middle';
+    for (let cm = -20; cm <= 20; cm++) {
+      const py = 1024 - (cm / 100 / MAT_D) * 2048;
+      const long = cm % 5 === 0;
+      for (const [x0, x1] of [[34, long ? 66 : 50], [2014, long ? 1982 : 1998]]) {
+        m.fillRect(Math.min(x0, x1), py - 1, Math.abs(x1 - x0), 2);
+      }
+      if (long) {
+        m.textAlign = 'left';
+        m.fillText(String(cm), 76, py);
+        m.textAlign = 'right';
+        m.fillText(String(cm), 1972, py);
+      }
+    }
+    m.textAlign = 'center';
+    m.fillStyle = 'rgba(150,230,255,0.6)';
+    setFont(m, 20, 400, 6, MONO);
+    m.fillText('FOLD ARRAY', 1024, 1984);
     const matGeo = new ShapeGeometry(roundedRect(MAT_W, MAT_D, 0.025));
     const uv = matGeo.attributes.uv;
     const pos = matGeo.attributes.position;
     for (let i = 0; i < uv.count; i++) {
       uv.setXY(i, pos.getX(i) / MAT_W + 0.5, pos.getY(i) / MAT_D + 0.5);
     }
-    const feltSize = 512;
-    const felt = normalTexture(heightToNormal(feltHeight(feltSize, 11), feltSize, 2.4), feltSize);
-    felt.wrapS = felt.wrapT = RepeatWrapping;
-    felt.repeat.set(3, 3);
-    felt.generateMipmaps = true;
-    felt.minFilter = LinearMipmapLinearFilter;
-    felt.needsUpdate = true;
-    const mat = new Mesh(
-      matGeo,
-      new MeshStandardMaterial({ map: matTex, normalMap: felt, normalScale: new Vector2(0.8, 0.8), roughness: 0.96, metalness: 0, envMapIntensity: 0.6 }),
-    );
+    const mat = new Mesh(matGeo, new MeshBasicMaterial({ map: matTex, toneMapped: false }));
     mat.rotation.x = -Math.PI / 2;
     mat.name = 'Mat';
-    mat.receiveShadow = true;
     this.root.add(mat);
     this.matMesh = mat;
 
@@ -239,8 +260,8 @@ export class BoardView {
 
     // Thin rim so the mat reads as an object on the table.
     const rim = new Mesh(
-      new ShapeGeometry(roundedRect(MAT_W + 0.008, MAT_D + 0.008, 0.028)),
-      new MeshBasicMaterial({ color: new Color(0x17181b) }),
+      new ShapeGeometry(roundedRect(MAT_W + 0.0028, MAT_D + 0.0028, 0.0262)),
+      new MeshBasicMaterial({ color: new Color(0x58d6ff), toneMapped: false }),
     );
     rim.rotation.x = -Math.PI / 2;
     rim.position.y = -0.0006;
@@ -281,7 +302,7 @@ export class BoardView {
 
     // Live crease guide.
     this.creaseMat = new MeshBasicMaterial({
-      color: new Color(0xfff6d8),
+      color: new Color(0xff7a45),
       map: lightBeam(),
       transparent: true,
       opacity: 0.95,
@@ -324,7 +345,7 @@ export class BoardView {
     this.card.rotation.set(-0.42, 0.3, 0);
     this.root.add(this.card);
 
-    const gold = { color: 0xffd166, transparent: true, depthWrite: false, depthTest: false, toneMapped: false };
+    const gold = { color: 0xff7a45, transparent: true, depthWrite: false, depthTest: false, toneMapped: false };
     this.hintRing = new Mesh(new RingGeometry(0.0125, 0.0145, 48), new MeshBasicMaterial(gold));
     this.hintRing.rotation.x = -Math.PI / 2;
     this.hintRing.renderOrder = 72;
@@ -349,7 +370,33 @@ export class BoardView {
       }
       this.dots.push({ disc, ring });
     }
+    this.measure.mesh.rotation.x = -1.05;
+    this.measure.mesh.visible = false;
+    this.root.add(this.measure.mesh);
     floatOverRoom(this.card);
+    floatOverRoom(this.measure.mesh);
+  }
+
+  /** A live reading beside the crease being made. */
+  private measure = new TextLabel(0.0185, 56, 500, 'rgba(255,190,150,1)', LAYER.overlay, MONO);
+
+  setMeasure(line: Line | null, fold: number, par: number, solves: boolean) {
+    const m = this.measure.mesh;
+    m.visible = !!line;
+    if (!line) return;
+    // Direction of the crease in degrees, 0 to 180.
+    const a = ((Math.atan2(line.ny, line.nx) * 180) / Math.PI + 90 + 360) % 180;
+    this.measure.set(
+      `CREASE ${a.toFixed(1).padStart(5, '0')}  FOLD ${fold}/${par}${solves ? '  MATCH' : ''}`,
+      solves ? 'rgba(130,255,180,1)' : 'rgba(255,190,150,1)',
+    );
+    const x = line.nx * line.d;
+    const y = line.ny * line.d;
+    // Out along the crease, towards the player's side of the board.
+    const dx = -line.ny;
+    const dy = line.nx;
+    const sign = dy < 0 ? 1 : -1;
+    m.position.set(x + dx * sign * 0.17, 0.016, -(y + dy * sign * 0.17));
   }
 
   /** Hides the crease, hint and goal marks during the opening. */
@@ -522,7 +569,7 @@ export class BoardView {
     c.save();
     c.beginPath();
     c.roundRect(26, 26, 460, 400, 36);
-    c.fillStyle = 'rgba(0,0,0,0.3)';
+    c.fillStyle = 'rgba(0,8,14,0.55)';
     c.fill();
     c.clip();
     c.translate(26 + 230 - 480 * 0.9, 26 + 200 - 480 * 0.9);
@@ -531,16 +578,16 @@ export class BoardView {
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     c.fillStyle = INK.primary;
-    setFont(c, 50, 700, -0.5);
-    c.fillText(title, 256, 508, 460);
+    setFont(c, 34, 400, 1, DISPLAY);
+    c.fillText(title.toUpperCase(), 256, 508, 460);
     c.fillStyle = INK.secondary;
-    setFont(c, 30, 500);
-    c.fillText(subtitle, 256, 556, 460);
+    setFont(c, 28, 500, 0.5, MONO);
+    c.fillText(subtitle.toUpperCase(), 256, 556, 460);
     if (footer) {
       // Collection line, e.g. "Zoo 7 · 3-day streak".
       c.fillStyle = INK.tertiary;
-      setFont(c, 24, 500);
-      c.fillText(footer, 256, 598, 460);
+      setFont(c, 22, 500, 0.5, MONO);
+      c.fillText(footer.toUpperCase(), 256, 598, 460);
     }
     this.cardTex.needsUpdate = true;
   }
@@ -552,7 +599,7 @@ export class BoardView {
   /** Shows the crease guide along `line`, clipped to [lo, hi] along the line. */
   showCrease(line: Line | null, highlight = false, solves = false) {
     this.warm = !!line && solves;
-    this.outlineMat.color.set(this.warm ? 0xffd166 : 0xffffff);
+    this.outlineMat.color.set(this.warm ? 0x6dffa8 : 0xbdf2ff);
     if (!line) {
       this.crease.visible = false;
       return;
@@ -567,7 +614,7 @@ export class BoardView {
     // Plane's long axis is local x; rotate around world up to the line direction.
     const angle = Math.atan2(line.nx, -line.ny);
     this.crease.rotation.set(-Math.PI / 2, 0, angle);
-    this.creaseColor = solves ? 0xffc53d : highlight ? 0xffd166 : 0xfff6d8;
+    this.creaseColor = solves ? 0x6dffa8 : highlight ? 0xff5a30 : 0xff7a45;
     this.creaseMat.color.set(this.highContrast ? 0xffffff : this.creaseColor);
   }
 

@@ -6,7 +6,6 @@
  */
 
 import {
-  AdditiveBlending,
   BufferGeometry,
   CanvasTexture,
   Color,
@@ -48,13 +47,15 @@ void main() {
   float d = length(vWorld.xz - origin.xz);
   if (d > radius) discard;
   float behind = radius - d;
-  float wave = exp(-pow(behind * 4.2, 2.0));
-  // Fine dots that catch the light as the wave passes, then settle.
-  vec2 g = fract(vSurf * 20.0) - 0.5;
-  float dots = 1.0 - smoothstep(0.05, 0.13, length(g));
-  float tail = exp(-behind * 1.5);
-  float a = (0.13 * wave + dots * (0.07 + 0.8 * tail)) * fade * boost;
-  gl_FragColor = vec4(color, a);
+  float wave = exp(-pow(behind * 5.0, 2.0));
+  // A fine measuring grid drawn across every surface as the wave reads it.
+  vec2 cell = vSurf * 10.0;
+  vec2 g = abs(fract(cell + 0.5) - 0.5);
+  float w = max(fwidth(cell.x), 0.02);
+  float line = 1.0 - smoothstep(0.0, w * 1.3, min(g.x, g.y));
+  float tail = 0.2 + 0.8 * exp(-behind * 0.9);
+  float a = (0.03 + 0.5 * line * tail + 0.42 * wave) * fade * boost;
+  gl_FragColor = vec4(color * (0.75 + wave * 0.8) * a, a * 0.25);
 }`;
 
 function labelTexture(text: string): CanvasTexture {
@@ -62,17 +63,14 @@ function labelTexture(text: string): CanvasTexture {
   c.width = 512;
   c.height = 96;
   const g = c.getContext('2d')!;
-  setFont(g, 44, 500);
-  const w = Math.min(500, g.measureText(text).width + 64);
+  setFont(g, 30, 500, 1);
+  const w = Math.min(500, g.measureText(text).width + 56);
   const x = (512 - w) / 2;
-  g.fillStyle = 'rgba(28,29,34,0.66)';
+  g.fillStyle = 'rgba(2,18,28,0.78)';
   g.beginPath();
-  g.roundRect(x, 12, w, 72, 36);
+  g.roundRect(x, 16, w, 64, 4);
   g.fill();
-  const rim = g.createLinearGradient(0, 12, 0, 84);
-  rim.addColorStop(0, 'rgba(255,255,255,0.55)');
-  rim.addColorStop(1, 'rgba(255,255,255,0.08)');
-  g.strokeStyle = rim;
+  g.strokeStyle = 'rgba(120,225,255,0.85)';
   g.lineWidth = 2;
   g.stroke();
   g.fillStyle = INK.primary;
@@ -86,8 +84,14 @@ function labelTexture(text: string): CanvasTexture {
 }
 
 function niceLabel(s: Surface): string {
-  const raw = (s.label || s.kind).replace(/_/g, ' ');
-  return raw[0].toUpperCase() + raw.slice(1);
+  const raw = (s.label || s.kind).replace(/_/g, ' ').toUpperCase();
+  const xs = s.polygon.map((p) => p.x);
+  const ys = s.polygon.map((p) => p.y);
+  const zs = s.polygon.map((p) => p.z);
+  const span = (v: number[]) => Math.max(...v) - Math.min(...v);
+  const a = s.kind === 'wall' ? Math.max(span(xs), span(zs)) : span(xs);
+  const b = s.kind === 'wall' ? span(ys) : span(zs);
+  return `${raw} ${a.toFixed(1)}x${b.toFixed(1)} M`;
 }
 
 interface Item {
@@ -121,7 +125,7 @@ export class RoomScan {
       [...surfaces]
         .filter((s) => s.kind !== 'floor')
         .sort((a, b) => a.center.distanceTo(origin) - b.center.distanceTo(origin))
-        .slice(0, 5),
+        .slice(0, 8),
     );
     for (const s of surfaces) {
       if (s.polygon.length < 3) continue;
@@ -154,9 +158,9 @@ export class RoomScan {
         transparent: true,
         depthWrite: false,
         side: DoubleSide,
-        blending: AdditiveBlending,
+        premultipliedAlpha: true,
         uniforms: {
-          color: { value: new Color(isChosen ? 0xffe2a8 : 0xffffff) },
+          color: { value: new Color(isChosen ? 0xffb65c : 0x4fd0ff) },
           origin: { value: this.origin },
           radius: { value: 0 },
           fade: { value: 1 },
@@ -172,7 +176,7 @@ export class RoomScan {
         label = new Sprite(
           new SpriteMaterial({ map: labelTexture(niceLabel(s)), transparent: true, depthWrite: false, depthTest: false }),
         );
-        label.scale.set(0.26, 0.049, 1);
+        label.scale.set(0.3, 0.056, 1);
         label.position.copy(s.center).addScaledVector(s.normal, s.kind === 'wall' ? 0.05 : 0.09);
         label.renderOrder = 81;
         label.visible = false;

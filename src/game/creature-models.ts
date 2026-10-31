@@ -13,17 +13,17 @@ import {
   Color,
   EdgesGeometry,
   Float32BufferAttribute,
-  FrontSide,
   Group,
   IcosahedronGeometry,
   LineBasicMaterial,
   LineSegments,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   Object3D,
   Vector3,
+  ShaderMaterial,
 } from '@iwsdk/core';
+import { holoBody, holoCore, holoLine } from './holo.js';
 import type { CreatureKind } from './levels.js';
 
 export type P = [number, number, number];
@@ -55,11 +55,15 @@ export interface Rig {
   folds: Fold[];
   /** Crease lines; brightened while the creature folds itself up. */
   lines: LineBasicMaterial;
+  /** The projected body: exploded view, slice and forming edge live on this. */
+  holo: ShaderMaterial;
+  /** The inner layer, shown only while a creature is being presented. */
+  core: ShaderMaterial;
+  cores: Mesh[];
   /** Every crease-line object, hidden on far-away creatures to save draw calls. */
   edges: LineSegments[];
 }
 
-const paper = new MeshStandardMaterial({ vertexColors: true, side: FrontSide, roughness: 0.82, metalness: 0, envMapIntensity: 0.95 });
 const eyeMat = new MeshBasicMaterial({ vertexColors: true });
 
 /** One unit eye: a flattened ink dot with its white glint, in one draw call. */
@@ -88,7 +92,7 @@ function eyeGeometry(): BufferGeometry {
   return out;
 }
 const eyeGeo = eyeGeometry();
-const INK = new Color(0x2a2420);
+const INK = new Color(0x9fe9ff);
 
 const sub = (a: P, b: P): Vector3 => new Vector3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const mix = (pts: P[], w: number[]): P => {
@@ -115,6 +119,9 @@ class Model {
   constructor(
     private lines: LineBasicMaterial,
     private edgeList: LineSegments[],
+    private holo: ShaderMaterial,
+    private core: ShaderMaterial,
+    private cores: Mesh[],
   ) {}
 
   private push(t: Tri, color: Color, shade: number) {
@@ -146,13 +153,17 @@ class Model {
     g.setAttribute('color', new Float32BufferAttribute(this.col, 3));
     g.computeVertexNormals();
     const out = new Group();
-    const mesh = new Mesh(g, paper);
-    mesh.castShadow = true;
+    const mesh = new Mesh(g, this.holo);
     mesh.name = 'Paper';
     const edges = new LineSegments(new EdgesGeometry(g, 14), this.lines);
     edges.name = 'Creases';
     this.edgeList.push(edges);
-    out.add(mesh, edges);
+    const core = new Mesh(g, this.core);
+    core.name = 'Core';
+    core.visible = false;
+    core.raycast = () => {};
+    this.cores.push(core);
+    out.add(mesh, edges, core);
     return out;
   }
 }
@@ -162,7 +173,10 @@ const tetra = (a: P, b: P, c: P, apex: P): Tri[] => [[a, b, c], ...cone([a, b, c
 
 /** Per-rig state shared by the part builders below. */
 class Kit {
-  readonly lines = new LineBasicMaterial({ color: INK, transparent: true, opacity: 0.35 });
+  readonly lines = holoLine(INK.getHex(), 0.6);
+  readonly holo = holoBody();
+  readonly core = holoCore();
+  readonly cores: Mesh[] = [];
   readonly eyes: Object3D[] = [];
   readonly folds: Fold[] = [];
   readonly edges: LineSegments[] = [];
@@ -173,7 +187,7 @@ class Kit {
   ) {}
 
   model(): Model {
-    return new Model(this.lines, this.edges);
+    return new Model(this.lines, this.edges, this.holo, this.core, this.cores);
   }
 
   /** An ink-dot eye sitting on face `f` of a solid centred at `c`. */
@@ -641,6 +655,9 @@ export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
     earR: parts.earR,
     folds: k.folds,
     lines: k.lines,
+    holo: k.holo,
+    core: k.core,
+    cores: k.cores,
     edges: k.edges,
   };
 }

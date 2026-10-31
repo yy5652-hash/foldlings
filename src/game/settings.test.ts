@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSettings, saveSettings } from './settings.js';
 
 const KEY = 'foldlings.settings.v1';
-const DEFAULTS = { easyFolds: false, leftHanded: false, reduceMotion: false, highContrast: false, matHeight: 0, matDistance: 0 };
+const DEFAULTS = { easyFolds: false, leftHanded: false, reduceMotion: false, highContrast: false, dimRoom: true, matHeight: 0, matDistance: 0 };
 
 describe('settings persistence', () => {
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe('settings persistence', () => {
   });
 
   it('round-trips all settings using the versioned key', () => {
-    const state = { easyFolds: true, leftHanded: true, reduceMotion: true, highContrast: true, matHeight: 2, matDistance: -1 };
+    const state = { easyFolds: true, leftHanded: true, reduceMotion: true, highContrast: true, dimRoom: false, matHeight: 2, matDistance: -1 };
     saveSettings(state);
     expect(localStorage.setItem).toHaveBeenCalledWith(KEY, JSON.stringify(state));
     expect(loadSettings()).toEqual(state);

@@ -200,7 +200,7 @@ export class FoldGame {
     for (let i = 0; i < 2; i++) {
       const c = new Mesh(
         ring,
-        new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, depthTest: false }),
+        new MeshBasicMaterial({ color: 0x8fe6ff, transparent: true, opacity: 0.8, depthWrite: false, depthTest: false, toneMapped: false }),
       );
       c.renderOrder = 70;
       c.visible = false;
@@ -254,6 +254,9 @@ export class FoldGame {
     const glass = new Surface({
       w: CAPSULE_W,
       h: CAPSULE_H,
+      r: 0.004,
+      cut: 0.014,
+      chrome: true,
       ...CONTROL_GLASS,
       shadow: 0.36,
       soft: 0.026,
@@ -431,6 +434,7 @@ export class FoldGame {
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
+    this.board.setMeasure(null, 0, 0, false);
     this.board.setGhostOpacity(this.isFree ? 0 : 0.55);
     this.played = [];
     this.board.setFoldCount(0, this.level.par);
@@ -706,6 +710,7 @@ export class FoldGame {
       this.board.hitPlane.releasePointerCapture?.(d.pointerId);
     }
     this.board.showCrease(null);
+    this.board.setMeasure(null, 0, 0, false);
     if (!d || !d.snap) {
       this.paperView.setPaper(this.paper);
       if (d && cancel) sfx.cancel();
@@ -914,6 +919,7 @@ export class FoldGame {
     }
     if (!d.snap) {
       this.board.showCrease(null);
+      this.board.setMeasure(null, 0, 0, false);
       return;
     }
     // Angle that swings the grabbed point towards the hand around the crease.
@@ -923,6 +929,7 @@ export class FoldGame {
     d.angle += (target - d.angle) * k;
     this.paperView.setFlapAngle(d.angle);
     this.board.showCrease(d.snap.line, d.angle > Math.PI / 2, d.solves);
+    this.board.setMeasure(this.hintsOff ? null : d.snap.line, this.folds + 1, this.level.par, d.solves);
   }
 
   private updateSettle(dt: number) {

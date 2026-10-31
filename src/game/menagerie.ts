@@ -92,6 +92,10 @@ interface Travel {
   start: Vector3;
   /** Seconds of fold-up and wake before it sets off. */
   prelude: number;
+  /** Seconds held on the projection table, and where. */
+  present: number;
+  presentAt: Vector3;
+  marked: boolean;
   woke: boolean;
   normal: Vector3 | null;
 }
@@ -99,7 +103,15 @@ interface Travel {
 /** Hover height above the mat while a creature folds itself up. */
 const HOVER = 0.12;
 const LIFT = 0.4;
+const smooth = (x: number) => {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
+};
 const WAKE = 0.9;
+/** Seconds a new creature is held on the projection table, and how large. */
+const PRESENT = 3.6;
+const PRESENT_SCALE = 1.45;
+const PRESENT_HEIGHT = 0.13;
 
 /** Where a travelling creature is at progress u (room frame). */
 function travelPoint(tr: Travel, u: number, out: Vector3): Vector3 {
@@ -130,14 +142,14 @@ class HomeMarker {
     this.root.name = 'HomeMarker';
     this.dots = new InstancedMesh(
       new SphereGeometry(0.003, 8, 6),
-      new MeshBasicMaterial({ color: 0xfff1dc, transparent: true, depthWrite: false, blending: AdditiveBlending }),
+      new MeshBasicMaterial({ color: 0x8fe6ff, transparent: true, depthWrite: false, blending: AdditiveBlending }),
       this.n,
     );
     this.dots.frustumCulled = false;
     const ring = new RingGeometry(0.05, 0.053, 48);
     this.ring = new Mesh(
       ring,
-      new MeshBasicMaterial({ color: 0xfff1dc, transparent: true, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
+      new MeshBasicMaterial({ color: 0x8fe6ff, transparent: true, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
     );
     this.root.add(this.dots, this.ring);
     this.root.visible = false;
@@ -543,7 +555,10 @@ export class Menagerie {
     c.root.scale.setScalar(0.35);
     c.startFoldUp();
     sfx.pop();
-    const prelude = c.foldDuration + WAKE;
+    const present = this.reduceMotion ? 0 : PRESENT;
+    const prelude = c.foldDuration + WAKE + present;
+    const presentAt = this.toRoom(avoid);
+    presentAt.y += PRESENT_HEIGHT;
 
     const flying = c.habitat !== 'ground';
     const dist = fromLocal.distanceTo(toLocal);
@@ -558,6 +573,9 @@ export class Menagerie {
       endQuat: rest.quat,
       start: startLocal,
       prelude,
+      present,
+      presentAt,
+      marked: false,
       woke: false,
       normal: rest.n ? new Vector3().fromArray(rest.n) : null,
     };
@@ -621,12 +639,24 @@ export class Menagerie {
       // Rise off the mat with half a turn while folding up, then wake facing the player.
       const since = tr.t + tr.prelude;
       const e = 1 - Math.pow(1 - Math.min(1, since / LIFT), 3);
-      root.scale.setScalar(0.35 + 0.65 * e);
+      const left = -tr.t;
+      // On the table: drawn up large at the centre, turning once, then let go.
+      const held = tr.present > 0 ? smooth((since - LIFT) / 0.9) * smooth(left / 0.8) : 0;
+      root.scale.setScalar((0.35 + 0.65 * e) * (1 + (PRESENT_SCALE - 1) * held));
       root.position.lerpVectors(tr.start, tr.from, e);
+      root.position.lerp(tr.presentAt, held);
       root.position.y += Math.sin(since * 3.2) * 0.006 * e;
       const local = this.toRoom(head);
       const yaw = Math.atan2(local.x - root.position.x, local.z - root.position.z) + Math.PI;
-      root.rotation.set(0, yaw + Math.PI * (1 - e), 0);
+      const spin = tr.present > 0 ? smooth((since - LIFT) / (tr.prelude - LIFT)) * Math.PI * 2 : 0;
+      root.rotation.set(0, yaw + Math.PI * (1 - e) + spin, 0);
+      // The body forms from the base up, its edge burning as it comes.
+      if (since < LIFT + 0.4) {
+        const at = root.getWorldPosition(this.tmp);
+        l.c.setForming(at.y - 0.04 + smooth(since / (LIFT + 0.3)) * 0.42);
+      } else {
+        l.c.setForming(99);
+      }
       if (!tr.woke && !l.c.folding && since > LIFT) {
         tr.woke = true;
         const at = root.getWorldPosition(this.tmp);
@@ -636,6 +666,9 @@ export class Menagerie {
         }
         sfx.awaken();
         l.c.poke();
+      }
+      if (!tr.marked && tr.woke && left < 0.9) {
+        tr.marked = true;
         this.marker.show(tr, tr.normal);
         this.markerTime = tr.dur - tr.t;
       }
@@ -661,6 +694,15 @@ export class Menagerie {
       l.c.setTravelling(false);
       if (l.endAir) this.startOrbit(l);
     }
+  }
+
+  /** The creature on the projection table right now, if there is one. */
+  presentation(): { c: Creature; left: number; awake: boolean; since: number } | null {
+    for (const l of this.live) {
+      const tr = l.travel;
+      if (tr && tr.t < 0 && tr.present > 0) return { c: l.c, left: -tr.t, awake: tr.woke, since: tr.t + tr.prelude };
+    }
+    return null;
   }
 
   /** Paper looks folded per kind, oldest first, for the album. */
@@ -823,6 +865,9 @@ export class Menagerie {
       endQuat,
       start: from,
       prelude: 0,
+      present: 0,
+      presentAt: from,
+      marked: true,
       woke: true,
       normal: null,
     };
@@ -853,16 +898,30 @@ function blobShadow(size: number): Mesh {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d')!;
-    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 31);
-    grad.addColorStop(0, 'rgba(0,0,0,0.45)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = grad;
+    // A small projector ring: whatever stands on it is being cast from here.
+    const glow = g.createRadialGradient(32, 32, 6, 32, 32, 32);
+    glow.addColorStop(0, 'rgba(60,180,240,0.5)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = glow;
     g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = 'rgba(150,235,255,0.95)';
+    g.lineWidth = 1.4;
+    g.beginPath();
+    g.arc(32, 32, 22, 0, Math.PI * 2);
+    g.stroke();
+    g.lineWidth = 1;
+    for (let k = 0; k < 16; k++) {
+      const an = (k / 16) * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(32 + Math.cos(an) * 25, 32 + Math.sin(an) * 25);
+      g.lineTo(32 + Math.cos(an) * 28, 32 + Math.sin(an) * 28);
+      g.stroke();
+    }
     shadowTex = new CanvasTexture(c);
   }
   const m = new Mesh(
     new PlaneGeometry(size, size),
-    new MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }),
+    new MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false, blending: AdditiveBlending, toneMapped: false }),
   );
   m.rotation.x = -Math.PI / 2;
   m.position.y = 0.0015;
@@ -883,10 +942,10 @@ class Confetti {
   private o = new Object3D();
 
   constructor() {
-    const g = new PlaneGeometry(0.012, 0.009);
+    const g = new PlaneGeometry(0.0055, 0.0055);
     this.mesh = new InstancedMesh(
       g,
-      new MeshBasicMaterial({ color: 0xffffff, side: DoubleSide, transparent: true }),
+      new MeshBasicMaterial({ color: 0xffffff, side: DoubleSide, transparent: true, depthWrite: false, blending: AdditiveBlending, toneMapped: false }),
       this.n,
     );
     this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);
@@ -907,8 +966,8 @@ class Confetti {
 
   burst(at: Vector3, color: string) {
     const a = new Color(color);
-    const b = new Color(0xf6f0e4);
-    const gold = new Color(0xffd166);
+    const b = new Color(0xbdf2ff);
+    const gold = new Color(0xffffff);
     for (let i = 0; i < this.n; i++) {
       this.pos[i].copy(at);
       const ang = Math.random() * Math.PI * 2;
@@ -953,7 +1012,7 @@ class Shockwave {
     this.mesh = new Mesh(
       new RingGeometry(0.92, 1, 64),
       new MeshBasicMaterial({
-        color: 0xffd166,
+        color: 0x62d6ff,
         transparent: true,
         blending: AdditiveBlending,
         depthWrite: false,

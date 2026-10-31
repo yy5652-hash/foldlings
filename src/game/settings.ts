@@ -1,6 +1,6 @@
 import { World } from '@iwsdk/core';
 import { Button } from './button.js';
-import { GlassWindow, INK, setFont, TextLabel, Toggle } from './glass.js';
+import { DISPLAY, GlassWindow, INK, setFont, TextLabel, Toggle } from './glass.js';
 import { safeGet, safeSet } from './room.js';
 import { sfx } from './sfx.js';
 
@@ -9,6 +9,8 @@ export interface SettingsState {
   leftHanded: boolean;
   reduceMotion: boolean;
   highContrast: boolean;
+  /** Keeps the real room dimmed so the projection reads. */
+  dimRoom: boolean;
   /** Comfort nudges for the mat, in steps (-3..3): 3 cm up, 4 cm away. */
   matHeight: number;
   matDistance: number;
@@ -33,6 +35,7 @@ export function loadSettings(): SettingsState {
     leftHanded: saved?.leftHanded === true,
     reduceMotion: saved?.reduceMotion === true,
     highContrast: saved?.highContrast === true,
+    dimRoom: saved?.dimRoom !== false,
     matHeight: step(saved?.matHeight),
     matDistance: step(saved?.matDistance),
   };
@@ -42,11 +45,12 @@ export function saveSettings(state: SettingsState) {
   safeSet(SETTINGS_KEY, JSON.stringify(state));
 }
 
-const ROWS: { key: 'easyFolds' | 'leftHanded' | 'reduceMotion' | 'highContrast'; label: string; hint: string }[] = [
+const ROWS: { key: 'easyFolds' | 'leftHanded' | 'reduceMotion' | 'highContrast' | 'dimRoom'; label: string; hint: string }[] = [
   { key: 'easyFolds', label: 'Easy folds', hint: 'More forgiving creases' },
   { key: 'leftHanded', label: 'Left-handed', hint: 'Swaps the controls' },
   { key: 'reduceMotion', label: 'Reduce motion', hint: 'Calmer animation' },
   { key: 'highContrast', label: 'High contrast', hint: 'Stronger paper and lines' },
+  { key: 'dimRoom', label: 'Dim the room', hint: 'Lets the projection glow' },
 ];
 const STEPS: { key: 'matHeight' | 'matDistance'; label: string }[] = [
   { key: 'matHeight', label: 'Mat height' },
@@ -60,7 +64,7 @@ const PX = 1024;
 const M = W / PX;
 const PAD = 44;
 const TOP = 132;
-const ROW_H = 112;
+const ROW_H = 104;
 const GAP = 30;
 const SECTION_W = PX - PAD * 2;
 const PY = TOP + ROWS.length * ROW_H + GAP + STEPS.length * ROW_H + PAD;
@@ -88,7 +92,7 @@ export class SettingsPanel {
       toggle.root.position.set(W / 2 - PAD * M - 0.018 - 0.0155, ly, 0.0015);
       this.win.content.add(toggle.root);
       this.win.addTick(toggle);
-      this.win.addHit(PAD, y, SECTION_W, ROW_H, 28, () => {
+      this.win.addHit(PAD, y, SECTION_W, ROW_H, 8, () => {
         this.state[row.key] = !this.state[row.key];
         toggle.on = this.state[row.key];
         sfx.click();
@@ -145,14 +149,17 @@ export class SettingsPanel {
     g.textBaseline = 'middle';
     g.textAlign = 'left';
     g.fillStyle = INK.primary;
-    setFont(g, 58, 700, -0.8);
-    g.fillText('Settings', PAD + 8, 76);
+    setFont(g, 40, 400, 2, DISPLAY);
+    g.fillText('SETTINGS', PAD + 8, 76);
 
     const section = (y: number, rows: number) => {
       g.fillStyle = INK.section;
       g.beginPath();
-      g.roundRect(PAD, y, SECTION_W, rows * ROW_H, 28);
+      g.roundRect(PAD, y, SECTION_W, rows * ROW_H, 8);
       g.fill();
+      g.strokeStyle = 'rgba(120,220,255,0.28)';
+      g.lineWidth = 1.5;
+      g.stroke();
       g.fillStyle = 'rgba(255,255,255,0.09)';
       for (let i = 1; i < rows; i++) g.fillRect(PAD + 32, y + i * ROW_H - 1, SECTION_W - 32, 2);
     };
@@ -162,17 +169,17 @@ export class SettingsPanel {
     ROWS.forEach((row, i) => {
       const y = TOP + i * ROW_H;
       g.fillStyle = INK.primary;
-      setFont(g, 34, 500);
-      g.fillText(row.label, PAD + 32, y + ROW_H / 2 - 17);
+      setFont(g, 31, 500);
+      g.fillText(row.label.toUpperCase(), PAD + 32, y + ROW_H / 2 - 17);
       g.fillStyle = INK.secondary;
-      setFont(g, 25, 400);
+      setFont(g, 23, 400);
       g.fillText(row.hint, PAD + 32, y + ROW_H / 2 + 22);
     });
     STEPS.forEach((row, j) => {
       const y = TOP + (ROWS.length + j) * ROW_H + GAP;
       g.fillStyle = INK.primary;
-      setFont(g, 34, 500);
-      g.fillText(row.label, PAD + 32, y + ROW_H / 2);
+      setFont(g, 31, 500);
+      g.fillText(row.label.toUpperCase(), PAD + 32, y + ROW_H / 2);
     });
     this.win.commit();
   }

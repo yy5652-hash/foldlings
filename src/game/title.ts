@@ -1,21 +1,21 @@
 /**
- * The opening. The room dims, sheets of paper drift down through the air and
- * gather on the mat, and the name appears above them. Then the room comes back
- * and the top sheet is your first puzzle. Shown once per session.
+ * The opening. The room dims, the table powers up, sheets of light drift down
+ * through the air and gather on the mat, and the name appears above them. Then
+ * the top sheet is your first puzzle. Shown once per session.
  */
 
 import {
   CanvasTexture,
   Color,
-  DoubleSide,
   Group,
   Mesh,
-  MeshStandardMaterial,
   PlaneGeometry,
+  ShaderMaterial,
   Vector3,
 } from '@iwsdk/core';
 import { PAPER_SIZE } from '../fold/paper.js';
-import { contentTexture, follow, INK, LAYER, setFont, Surface } from './glass.js';
+import { contentTexture, DISPLAY, follow, INK, LAYER, setFont, Surface } from './glass.js';
+import { holoPane } from './holo.js';
 import { LOOKS } from './levels.js';
 import { sfx } from './sfx.js';
 
@@ -72,11 +72,11 @@ export class TitleCard {
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillStyle = INK.primary;
-    setFont(g, 268, 600, -7);
-    g.fillText('Foldlings', c.width / 2, 212);
-    g.fillStyle = 'rgba(255,255,255,0.78)';
-    setFont(g, 66, 500, 0);
-    g.fillText('Fold paper. Bring it to life.', c.width / 2, 450);
+    setFont(g, 196, 400, 10, DISPLAY);
+    g.fillText('FOLDLINGS', c.width / 2, 212, c.width - 60);
+    g.fillStyle = 'rgba(160,230,255,0.9)';
+    setFont(g, 52, 500, 6);
+    g.fillText('FOLD PAPER. BRING IT TO LIFE.', c.width / 2, 450);
     this.tex = contentTexture(c);
     this.text = new Surface({ w: W, h: H, r: 0, body: 0, map: this.tex, order: LAYER.overlay });
     this.text.fade = 0;
@@ -87,9 +87,7 @@ export class TitleCard {
     geo.rotateX(-Math.PI / 2);
     for (let i = 0; i < SHEETS; i++) {
       const look = LOOKS[(i * 3 + 1) % LOOKS.length];
-      const mat = new MeshStandardMaterial({ color: new Color(look.front), roughness: 0.86, side: DoubleSide });
-      const mesh = new Mesh(geo, mat);
-      mesh.castShadow = true;
+      const mesh = new Mesh(geo, holoPane(new Color(look.front)));
       mesh.visible = false;
       this.paper.add(mesh);
       const a = (i / SHEETS) * Math.PI * 2 + 0.6;
@@ -107,7 +105,7 @@ export class TitleCard {
 
   /** Dresses the top sheet in the first puzzle's colour, then begins. */
   play(topColor: string) {
-    (this.sheets[SHEETS - 1].mesh.material as MeshStandardMaterial).color.set(topColor);
+    (this.sheets[SHEETS - 1].mesh.material as ShaderMaterial).uniforms.uColor.value.set(topColor);
     this.t = 0;
     this.k = 0;
     this.gathered = false;

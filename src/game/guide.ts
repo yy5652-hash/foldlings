@@ -29,7 +29,7 @@ export class Guide {
   private thumb: Mesh;
   private index: Mesh;
   private ghostMat = new MeshBasicMaterial({
-    color: new Color(0xffffff),
+    color: new Color(0x62d6ff),
     transparent: true,
     opacity: 0.4,
     depthWrite: false,
@@ -56,18 +56,18 @@ export class Guide {
     this.flapPivot.renderOrder = 60;
     this.crease = new Mesh(
       new PlaneGeometry(1, 0.004),
-      new MeshBasicMaterial({ color: 0xffd166, transparent: true, depthWrite: false }),
+      new MeshBasicMaterial({ color: 0xff7a45, transparent: true, depthWrite: false, toneMapped: false }),
     );
     this.crease.renderOrder = 61;
     this.root.add(this.crease);
     const tip = new SphereGeometry(0.0065, 16, 12);
-    const tipMat = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
+    const tipMat = new MeshBasicMaterial({ color: 0x9fe9ff, toneMapped: false, transparent: true, opacity: 0.85, depthWrite: false });
     this.thumb = new Mesh(tip, tipMat);
     this.index = new Mesh(tip, tipMat);
     this.thumb.renderOrder = this.index.renderOrder = 62;
     this.root.add(this.thumb, this.index);
 
-    this.captionGlass = new Surface({ w: 0.2, h: 0.038, ...WINDOW_GLASS, shadow: 0.3, soft: 0.018, drop: 0.006, order: LAYER.overlay });
+    this.captionGlass = new Surface({ w: 0.2, h: 0.038, r: 0.002, cut: 0.008, ...WINDOW_GLASS, shadow: 0.3, soft: 0.018, drop: 0.006, order: LAYER.overlay });
     this.captionLabel = new TextLabel(0.0265, 72, 500, INK.primary, LAYER.overlay + 1);
     this.captionLabel.mesh.position.z = 0.0006;
     this.captionRoot.add(this.captionGlass.mesh, this.captionLabel.mesh);
@@ -83,7 +83,7 @@ export class Guide {
     this.captionOn = text !== '';
     if (!text) return;
     this.captionLabel.set(text);
-    this.captionGlass.setSize(this.captionLabel.width + 0.03, 0.038);
+    this.captionGlass.setSize(this.captionLabel.width + 0.03, 0.038, 0.002);
   }
 
   /** Starts demonstrating `fold` on `paper`; returns false if it is not a valid fold. */

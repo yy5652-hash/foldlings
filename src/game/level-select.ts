@@ -9,7 +9,7 @@ import { applyFolds } from '../fold/paper.js';
 import { drawShape } from './board-view.js';
 import { Button } from './button.js';
 import { buildRig } from './creature-models.js';
-import { drawIcon, drawStars, GlassWindow, INK, LAYER, setFont } from './glass.js';
+import { drawIcon, drawStars, GlassWindow, INK, LAYER, setFont, DISPLAY } from './glass.js';
 import { Level, LEVELS, PER_WORLD, WORLDS } from './levels.js';
 import { Best, totalStars, UNLOCK, worldOpen } from './score.js';
 import { sfx } from './sfx.js';
@@ -112,7 +112,7 @@ export class LevelSelect {
   }
 
   private addTile(t: Tile, run: () => void, name: string) {
-    this.win.addHit(t.x, t.y, t.w, t.h, 28, () => {
+    this.win.addHit(t.x, t.y, t.w, t.h, 8, () => {
       sfx.click();
       run();
     }, name);
@@ -157,8 +157,8 @@ export class LevelSelect {
         drawIcon(g, 'plus', cx, t.y + 102, 72, INK.primary);
         g.textAlign = 'center';
         g.fillStyle = INK.primary;
-        setFont(g, 30, 600);
-        g.fillText('Free fold', cx, t.y + 190, t.w - 20);
+        setFont(g, 25, 600);
+        g.fillText('FREE FOLD', cx, t.y + 190, t.w - 20);
         g.fillStyle = INK.secondary;
         setFont(g, 22, 400);
         g.fillText('make a puzzle', cx, t.y + 224, t.w - 20);
@@ -179,7 +179,7 @@ export class LevelSelect {
   private card(g: CanvasRenderingContext2D, t: Tile) {
     g.fillStyle = INK.section;
     g.beginPath();
-    g.roundRect(t.x, t.y, t.w, t.h, 28);
+    g.roundRect(t.x, t.y, t.w, t.h, 8);
     g.fill();
   }
 
@@ -187,9 +187,9 @@ export class LevelSelect {
     g.textBaseline = 'middle';
     g.textAlign = 'left';
     g.fillStyle = INK.primary;
-    setFont(g, 52, 700, -0.8);
+    setFont(g, 36, 400, 1.5, DISPLAY);
     // On a subpage the title sits beside the back button.
-    g.fillText(title, this.page === -1 ? PAD : PAD + 76, 70, PX - PAD * 2 - 240);
+    g.fillText(title.toUpperCase(), this.page === -1 ? PAD : PAD + 76, 70, PX - PAD * 2 - 240);
     setFont(g, 24, 500);
     g.fillStyle = INK.secondary;
     g.textAlign = 'right';
@@ -218,8 +218,8 @@ export class LevelSelect {
       const open = worldOpen(w, stars);
       this.addTile(t, () => open && this.showWorld(w), `LevelBook_world_${w}`);
       const look = LEVELS[w * PER_WORLD].look;
-      const rig = buildRig(WORLDS[w].kind, open ? look.front : '#202126', open ? look.back : '#202126');
-      if (!open) rig.lines.opacity = 0;
+      const rig = buildRig(WORLDS[w].kind, open ? look.front : '#2b6c8a', open ? look.back : '#2b6c8a');
+      if (!open) rig.lines.opacity = 0.2;
       const size = new Box3().setFromObject(rig.root).getSize(new Vector3());
       rig.root.scale.setScalar(0.062 / Math.max(size.x, size.y, size.z));
       rig.root.traverse((o) => {
@@ -246,9 +246,9 @@ export class LevelSelect {
     this.card(g, { x: 522, y: 120, w: 458, h: 100 });
     g.textAlign = 'left';
     g.fillStyle = INK.primary;
-    setFont(g, 32, 600);
-    g.fillText('Daily Fold', PAD + 24, 153);
-    g.fillText('My puzzles', 546, 153);
+    setFont(g, 27, 600);
+    g.fillText('DAILY FOLD', PAD + 24, 153);
+    g.fillText('MY PUZZLES', 546, 153);
     g.fillStyle = INK.secondary;
     setFont(g, 22, 400);
     const k = this.host.streak();
@@ -261,8 +261,8 @@ export class LevelSelect {
       const cx = t.x + t.w / 2;
       g.textAlign = 'center';
       g.fillStyle = open ? INK.primary : INK.secondary;
-      setFont(g, 32, 600);
-      g.fillText(WORLDS[w].name, cx, t.y + 161, t.w - 24);
+      setFont(g, 27, 600);
+      g.fillText(WORLDS[w].name.toUpperCase(), cx, t.y + 161, t.w - 24);
       g.fillStyle = INK.secondary;
       setFont(g, 24, 500);
       let label: string;
@@ -364,7 +364,7 @@ export class LevelSelect {
         g.textAlign = 'center';
         g.fillStyle = INK.secondary;
         setFont(g, 22, 400);
-        g.fillText(`Par ${l.par}`, cx, t.y + 235);
+        g.fillText(`PAR ${l.par}`, cx, t.y + 235);
       } else {
         drawIcon(g, 'lock', cx, t.y + 120, 44, INK.tertiary);
       }

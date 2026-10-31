@@ -7,7 +7,7 @@
 import { Box3, Group, LineSegments, Mesh, MeshBasicMaterial, Vector3, World } from '@iwsdk/core';
 import { Button } from './button.js';
 import { buildRig, CREATURE_KINDS } from './creature-models.js';
-import { drawIcon, GlassWindow, INK, LAYER, setFont } from './glass.js';
+import { drawIcon, GlassWindow, INK, LAYER, setFont, DISPLAY } from './glass.js';
 import type { CreatureKind } from './levels.js';
 import { LOOKS } from './levels.js';
 import { sfx } from './sfx.js';
@@ -105,8 +105,8 @@ export class Album {
     g.textBaseline = 'middle';
     g.textAlign = 'left';
     g.fillStyle = INK.primary;
-    setFont(g, 52, 700, -0.8);
-    g.fillText(this.page === 'zoo' ? 'Paper zoo' : 'Badges', PAD, 77, 280);
+    setFont(g, 36, 400, 1.5, DISPLAY);
+    g.fillText(this.page === 'zoo' ? 'ZOO' : 'BADGES', PAD, 77, 280);
 
     // Two large pill targets share one track centred in the title row.
     const x = (PX - 320) / 2;
@@ -129,7 +129,7 @@ export class Album {
       g.textAlign = 'center';
       g.fillStyle = active ? INK.primary : INK.secondary;
       setFont(g, 30, 600);
-      g.fillText(page === 'zoo' ? 'Zoo' : 'Badges', sx + 80, y + h / 2, 136);
+      g.fillText(page === 'zoo' ? 'ZOO' : 'BADGES', sx + 80, y + h / 2, 136);
       this.win.addHit(sx, y, 160, h, h / 2, () => {
         if (this.page === page) return;
         sfx.click();
@@ -155,7 +155,7 @@ export class Album {
     g.textAlign = 'left';
     g.fillStyle = INK.secondary;
     setFont(g, 24, 400);
-    g.fillText('Little milestones, one fold at a time', PAD, 143, PX - PAD * 2);
+    g.fillText('Milestones, one fold at a time', PAD, 143, PX - PAD * 2);
     this.badges.forEach((b, i) => {
       const x = PAD + (i % COLS) * 238;
       const y = 170 + Math.floor(i / COLS) * 154;
@@ -163,7 +163,7 @@ export class Album {
       const cx = x + w / 2;
       g.fillStyle = INK.section;
       g.beginPath();
-      g.roundRect(x, y, w, 148, 28);
+      g.roundRect(x, y, w, 148, 8);
       g.fill();
       if (b.earned) {
         const grad = g.createRadialGradient(cx, y + 28, 0, cx, y + 28, 28);
@@ -177,8 +177,8 @@ export class Album {
       drawIcon(g, 'star', cx, y + 28, 36, b.earned ? INK.gold : INK.tertiary, 1.6, b.earned);
       g.textAlign = 'center';
       g.fillStyle = b.earned ? INK.primary : INK.secondary;
-      setFont(g, 30, 600);
-      g.fillText(b.title, cx, y + 65, w - 24);
+      setFont(g, 26, 600);
+      g.fillText(b.title.toUpperCase(), cx, y + 65, w - 24);
       g.fillStyle = INK.secondary;
       setFont(g, 21, 400);
       // Up to three lines keep the instructions readable without tiny type.
@@ -209,13 +209,13 @@ export class Album {
       const have = e.looks.length > 0;
       g.fillStyle = INK.section;
       g.beginPath();
-      g.roundRect(r.x, r.y, r.w, r.h, 28);
+      g.roundRect(r.x, r.y, r.w, r.h, 8);
       g.fill();
       g.textAlign = 'center';
       g.fillStyle = have ? INK.primary : INK.secondary;
-      setFont(g, 32, 600);
+      setFont(g, 27, 600);
       const name = e.kind[0].toUpperCase() + e.kind.slice(1);
-      g.fillText(have ? name : '? ? ?', r.x + r.w / 2, r.y + r.h - 54, r.w - 24);
+      g.fillText(have ? name.toUpperCase() : '? ? ?', r.x + r.w / 2, r.y + r.h - 54, r.w - 24);
       setFont(g, 24, 500);
       g.fillStyle = INK.secondary;
       if (!have) {
@@ -251,8 +251,8 @@ export class Album {
     entries.forEach((e, i) => {
       const have = e.looks.length > 0;
       const look = have ? LOOKS[e.looks[e.looks.length - 1] % LOOKS.length] : null;
-      const rig = buildRig(e.kind, look?.front ?? '#202126', look?.back ?? '#202126');
-      if (!have) rig.lines.opacity = 0;
+      const rig = buildRig(e.kind, look?.front ?? '#2b6c8a', look?.back ?? '#2b6c8a');
+      if (!have) rig.lines.opacity = 0.2;
       const root = rig.root;
       const size = new Box3().setFromObject(root).getSize(new Vector3());
       root.scale.setScalar(0.07 / Math.max(size.x, size.y, size.z));

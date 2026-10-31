@@ -6,7 +6,7 @@
 
 import { Entity, Group, Mesh, PokeInteractable, RayInteractable, Shape, ShapeGeometry, MeshBasicMaterial, Color, World } from '@iwsdk/core';
 import { Button } from './button.js';
-import { CONTROL_GLASS, floatOverRoom, GlassWindow, hitPlane, INK, LAYER, setFont, Spring, Surface, TextLabel } from './glass.js';
+import { CONTROL_GLASS, DISPLAY, floatOverRoom, GlassWindow, hitPlane, INK, LAYER, setFont, Spring, Surface, TextLabel } from './glass.js';
 import type { Best, Result } from './score.js';
 import { sfx } from './sfx.js';
 
@@ -16,8 +16,8 @@ const W = 0.3;
 const H = 0.17;
 const PX = 1024;
 const AUTO_NEXT = 8;
-const GOLD = new Color(0xffd166);
-const DIM = new Color(0xffffff);
+const GOLD = new Color(0xffc266);
+const DIM = new Color(0x8fe6ff);
 
 function starGeometry(r: number): ShapeGeometry {
   const s = new Shape();
@@ -51,14 +51,16 @@ class PillButton {
     this.surface = new Surface({
       w,
       h,
-      ...(prominent ? { tint: [1, 1, 1] as [number, number, number], body: 0.24, rim: 0.7, sheen: 0 } : CONTROL_GLASS),
+      r: 0.002,
+      cut: 0.008,
+      ...(prominent ? { tint: [0.1, 0.45, 0.6] as [number, number, number], body: 0.4, rim: 1, sheen: 0 } : CONTROL_GLASS),
       shadow: 0.3,
       soft: h * 0.4,
       drop: h * 0.1,
       order: LAYER.control,
     });
-    this.label = new TextLabel(0.0185, 64, prominent ? 600 : 500, INK.primary);
-    this.label.set(text);
+    this.label = new TextLabel(0.0175, 64, prominent ? 600 : 500, INK.primary);
+    this.label.set(text.toUpperCase());
     this.label.mesh.position.z = 0.0006;
     this.root.add(this.surface.mesh, this.label.mesh, hitPlane(w, h));
     const t = this.root as unknown as { addEventListener(type: string, fn: () => void): void };
@@ -75,7 +77,7 @@ class PillButton {
     this.surface.setFill(k, [1, 1, 1]);
     // Dark text would be right on the fill, but it runs under white text: keep
     // the fill below the label's contrast by holding it translucent.
-    this.surface.material.uniforms.uFillTint.value.set(0.42, 0.44, 0.48);
+    this.surface.material.uniforms.uFillTint.value.set(0.12, 0.62, 0.82);
   }
 
   update(dt: number) {
@@ -106,7 +108,7 @@ export class ResultCard {
   private pillOn = 0;
 
   constructor(world: World, parent: Entity, private onAction: (a: ResultAction) => void) {
-    this.win = new GlassWindow(world, { name: 'ResultCard', w: W, h: H, px: PX, r: 0.028, parent, autoClose: 1e9 });
+    this.win = new GlassWindow(world, { name: 'ResultCard', w: W, h: H, px: PX, parent, autoClose: 1e9 });
     const geo = starGeometry(0.0145);
     for (let i = 0; i < 3; i++) {
       const m = new Mesh(geo, new MeshBasicMaterial({ color: DIM.clone(), transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false }));
@@ -116,10 +118,10 @@ export class ResultCard {
       this.win.content.add(m);
     }
     // "Perfect": a small gold capsule that fades in after the third star.
-    this.pill = new Surface({ w: 0.064, h: 0.02, tint: [1, 0.82, 0.4], body: 0, order: LAYER.control });
+    this.pill = new Surface({ w: 0.074, h: 0.02, r: 0.002, cut: 0.005, tint: [1, 0.76, 0.4], body: 0, order: LAYER.control });
     this.pill.mesh.position.set(W / 2 - 0.05, H / 2 - 0.03, 0.001);
-    this.pillText = new TextLabel(0.0155, 56, 700, 'rgba(36,26,4,0.92)');
-    this.pillText.set('Perfect');
+    this.pillText = new TextLabel(0.0145, 56, 700, 'rgba(36,20,2,0.95)');
+    this.pillText.set('PERFECT');
     this.pillText.mesh.position.set(W / 2 - 0.05, H / 2 - 0.03, 0.0016);
     this.win.content.add(this.pill.mesh, this.pillText.mesh);
 
@@ -133,7 +135,7 @@ export class ResultCard {
     };
     // An ornament row in front of the window's lower edge.
     const y = -H / 2 + 0.002;
-    this.next = add(new PillButton('Next', 0.11, 0.04, true, () => this.fire('next')), 'Result_next');
+    this.next = add(new PillButton('Next', 0.11, 0.036, true, () => this.fire('next')), 'Result_next');
     this.next.root.position.set(0, y, 0.012);
     this.next.baseZ = 0.012;
     const retry = add(new Button('restart', () => this.fire('retry'), '', { r: 0.02 }), 'Result_retry');
@@ -188,16 +190,16 @@ export class ResultCard {
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillStyle = INK.primary;
-    setFont(g, 78, 700, -1.2);
-    g.fillText(title, PX / 2, 205, PX - 120);
+    setFont(g, 54, 400, 2, DISPLAY);
+    g.fillText(title.toUpperCase(), PX / 2, 205, PX - 120);
     g.fillStyle = gold ? INK.gold : INK.secondary;
-    setFont(g, 38, gold ? 600 : 500);
-    g.fillText(line, PX / 2, 276, PX - 120);
+    setFont(g, 33, gold ? 600 : 500);
+    g.fillText(line.toUpperCase(), PX / 2, 276, PX - 120);
     g.fillStyle = INK.secondary;
-    setFont(g, 34, 500);
-    const parts = [`${r.folds} ${r.folds === 1 ? 'fold' : 'folds'}`, `Par ${r.par}`];
-    if (r.hinted) parts.push('Hint used');
-    if (best) parts.push(`Best ${best.stars} of 3`);
+    setFont(g, 30, 500);
+    const parts = [`${r.folds} ${r.folds === 1 ? 'FOLD' : 'FOLDS'}`, `PAR ${r.par}`];
+    if (r.hinted) parts.push('HINT USED');
+    if (best) parts.push(`BEST ${best.stars}/3`);
     g.fillText(parts.join('  ·  '), PX / 2, 336, PX - 120);
     this.win.commit();
   }

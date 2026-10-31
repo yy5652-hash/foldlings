@@ -1,6 +1,6 @@
 /**
- * Round glass buttons. On the mat they float over the table; on a window they
- * sit on the glass. Poke them with a fingertip, point a ray, look and pinch, or
+ * Round instrument buttons of projected light. Beside the mat they float over
+ * the table; on a pane they sit on it. Poke them with a fingertip, point a ray, look and pinch, or
  * click with a mouse. A soft light follows whatever is pointing at them.
  */
 
@@ -32,7 +32,19 @@ function iconTexture(kind: IconKind, color: string): CanvasTexture {
   if (!t) {
     const c = document.createElement('canvas');
     c.width = c.height = 192;
-    drawIcon(c.getContext('2d')!, kind, 96, 96, 92, color, 1.9);
+    const g = c.getContext('2d')!;
+    // A graduated bezel, like the dial of an instrument.
+    g.strokeStyle = 'rgba(140,225,255,0.55)';
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const inner = i % 6 === 0 ? 74 : 81;
+      g.lineWidth = i % 6 === 0 ? 3 : 1.6;
+      g.beginPath();
+      g.moveTo(96 + Math.cos(a) * inner, 96 + Math.sin(a) * inner);
+      g.lineTo(96 + Math.cos(a) * 88, 96 + Math.sin(a) * 88);
+      g.stroke();
+    }
+    drawIcon(g, kind, 96, 96, 84, color, 1.6);
     t = contentTexture(c);
     iconCache.set(key, t);
   }
@@ -81,13 +93,13 @@ export class Button {
     this.root.name = `Button_${kind}`;
     this.r = opts.r ?? RADIUS;
     this.plain = !!opts.plain;
-    this.labelSize = opts.labelSize ?? 0.0155;
-    this.iconColor = opts.prominent ? '#15161a' : INK.primary;
+    this.labelSize = opts.labelSize ?? 0.0145;
+    this.iconColor = opts.prominent ? '#04161f' : INK.primary;
     const d = this.r * 2;
     const glass = this.plain
       ? { tint: [1, 1, 1] as [number, number, number], body: 0, rim: 0, sheen: 0 }
       : opts.prominent
-        ? { tint: [0.97, 0.97, 0.96] as [number, number, number], body: 1, rim: 0, sheen: 0 }
+        ? { tint: [0.3, 0.85, 1] as [number, number, number], body: 0.9, rim: 1, sheen: 0 }
         : CONTROL_GLASS;
     this.surface = new Surface({
       w: d,
@@ -149,7 +161,7 @@ export class Button {
       this.label.mesh.position.set(0, -this.r - this.labelSize * 0.62, 0.0006);
       this.cap.add(this.label.mesh);
     }
-    this.label.set(text);
+    this.label.set(text.toUpperCase());
   }
 
   /** Draws the eye: the button breathes for a few seconds. */
