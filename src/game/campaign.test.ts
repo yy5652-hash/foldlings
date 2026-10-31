@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyFolds, rasterize } from '../fold/paper.js';
-import { LEVELS, PER_WORLD, WORLDS } from './levels.js';
+import { LEVELS, PER_WORLD, WORLDS, customLevel } from './levels.js';
 
 const SIDE = Math.round(Math.sqrt(rasterize(applyFolds([])!).length));
 
@@ -54,6 +54,14 @@ describe('campaign', () => {
     for (let w = 0; w < WORLDS.length; w++) {
       const pars = LEVELS.filter((l) => l.world === w).map((l) => l.par);
       expect(pars[pars.length - 1]).toBeGreaterThanOrEqual(pars[0]);
+    }
+  });
+});
+
+describe('customLevel', () => {
+  it('always has a paper look, even when the code hashes above 2^31', () => {
+    for (const code of ['1D27P', '1B2507T', '121F1W29T', 'ZZZZZZZZZZ', '9W9W9W9W9']) {
+      expect(customLevel(code, 0).look).toBeDefined();
     }
   });
 });

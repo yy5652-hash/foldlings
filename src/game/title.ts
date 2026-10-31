@@ -25,7 +25,7 @@ const FALL = 2.1;
 const STAGGER = 0.42;
 const GATHER = FALL + (SHEETS - 1) * STAGGER;
 const TEXT_ON = 0.9;
-const TEXT_OFF = GATHER + 1.3;
+const TEXT_OFF = GATHER + 2.2;
 const END = TEXT_OFF + 0.55;
 
 const W = 0.5;
@@ -53,6 +53,8 @@ export class TitleCard {
   dim = 0;
   /** Told when the sheets have gathered, so the real paper can take over. */
   onGathered: (() => void) | null = null;
+  /** Told when the name has gone, so the mat's controls can return. */
+  onFinished: (() => void) | null = null;
   private text: Surface;
   private tex: CanvasTexture;
   private sheets: Sheet[] = [];
@@ -120,6 +122,7 @@ export class TitleCard {
 
   stop() {
     if (this.t >= 0 && !this.gathered) this.onGathered?.();
+    if (this.t >= 0) this.onFinished?.();
     this.t = -1;
     this.dim = 0;
     this.root.visible = this.paper.visible = false;

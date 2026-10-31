@@ -10,161 +10,296 @@
     <link rel="apple-touch-icon" href="icons/icon-192.png" />
     <title>Foldlings</title>
     <style>
-      :root {
-        --ink: #2b231c;
-        --paper: #f7f1e6;
-        --mat: #2f4a45;
-        --accent: #e2574c;
-      }
       html,
       body {
         margin: 0;
         height: 100%;
-        background: #1c2422;
-        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
         overflow: hidden;
+        background: #000;
+        font-family: 'Inter Variable', -apple-system, 'SF Pro Display', system-ui, sans-serif;
       }
       #scene-container {
         position: fixed;
         inset: 0;
       }
       #landing {
+        --secondary: rgba(255, 255, 255, 0.62);
         position: fixed;
         inset: 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        pointer-events: none;
-        color: var(--paper);
+        z-index: 1;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        scroll-behavior: smooth;
+        background: #000;
+        color: #fff;
+        text-align: center;
+        -webkit-font-smoothing: antialiased;
       }
-      #landing.hidden {
+      #landing,
+      #landing * {
+        box-sizing: border-box;
+      }
+      #landing.hidden,
+      #landing [hidden] {
         display: none;
       }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 22px 28px;
-        font-weight: 700;
-        font-size: 28px;
-        letter-spacing: 0.5px;
-        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+      #landing h1,
+      #landing h2,
+      #landing p {
+        margin: 0;
       }
-      .brand img {
-        width: 44px;
-        height: 44px;
-      }
-      .card {
-        pointer-events: auto;
-        margin: 0 auto 28px;
-        max-width: 560px;
-        width: calc(100% - 32px);
-        box-sizing: border-box;
-        background: rgba(247, 241, 230, 0.96);
-        color: var(--ink);
-        border-radius: 22px;
-        padding: 22px 24px 20px;
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-      }
-      .card h1 {
-        margin: 0 0 6px;
-        font-size: 22px;
-      }
-      .card p {
-        margin: 0 0 14px;
-        line-height: 1.45;
-        font-size: 16px;
-        color: #4a3f35;
-      }
-      .steps {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 10px;
-        margin: 0 0 16px;
-        padding: 0;
-        list-style: none;
-        font-size: 13.5px;
-        color: #5a4d40;
-      }
-      .steps li {
-        background: #efe6d6;
-        border-radius: 12px;
-        padding: 10px;
-        line-height: 1.35;
-      }
-      .steps b {
-        display: block;
-        color: var(--ink);
-        font-size: 14.5px;
-        margin-bottom: 2px;
-      }
-      .buttons {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      button {
-        font: inherit;
+      #landing h1,
+      #landing h2 {
         font-weight: 650;
-        font-size: 17px;
-        border: 0;
+        letter-spacing: -0.03em;
+        line-height: 1.05;
+        text-wrap: balance;
+      }
+      #landing .hero {
+        min-height: 100vh;
+        min-height: 100svh;
+        display: grid;
+        place-items: center;
+        padding: 96px max(20px, env(safe-area-inset-right)) 72px max(20px, env(safe-area-inset-left));
+        background-color: #08080a;
+        background-image: linear-gradient(180deg, rgba(0, 0, 0, 0.48), rgba(0, 0, 0, 0.72) 65%, #000), url('./landing/hero.jpg');
+        background-position: center;
+        background-size: cover;
+      }
+      #landing .hero-content {
+        width: 100%;
+        max-width: 1200px;
+      }
+      #landing .eyebrow {
+        margin-bottom: 28px;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      #landing h1 {
+        font-size: clamp(44px, 8vw, 104px);
+      }
+      #landing .hero-description {
+        max-width: 730px;
+        margin: 30px auto 0;
+        color: var(--secondary);
+        font-size: clamp(17px, 1.5vw, 21px);
+        line-height: 1.55;
+        text-wrap: pretty;
+      }
+      #landing .buttons {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        margin-top: 36px;
+      }
+      #landing button,
+      #landing a {
+        font: inherit;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #landing .buttons button {
+        min-height: 50px;
+        padding: 14px 24px;
+        border: 1px solid transparent;
         border-radius: 999px;
-        padding: 14px 22px;
+        font-size: 15px;
+        font-weight: 600;
         cursor: pointer;
+        transition: background-color 180ms ease, opacity 180ms ease;
       }
-      button.primary {
-        background: var(--accent);
+      #landing .primary {
+        background: #fff;
+        color: #08080a;
+      }
+      #landing .secondary {
+        background: rgba(255, 255, 255, 0.09);
+        border-color: rgba(255, 255, 255, 0.24) !important;
         color: #fff;
-        flex: 1 1 220px;
+        -webkit-backdrop-filter: blur(20px);
+        backdrop-filter: blur(20px);
       }
-      button.secondary {
-        background: var(--mat);
-        color: var(--paper);
-        flex: 1 1 140px;
-      }
-      button.ghost {
-        background: transparent;
-        color: #5a4d40;
-        text-decoration: underline;
-        padding: 8px 6px;
-        font-size: 14px;
-      }
-      button[disabled] {
-        opacity: 0.45;
+      #landing button:disabled {
+        opacity: 0.4;
         cursor: default;
       }
-      .note {
-        margin-top: 10px;
-        font-size: 13px;
-        color: #7a6b5c;
+      #landing .note {
+        max-width: 580px;
+        margin: 20px auto 0;
+        color: var(--secondary);
+        font-size: 12px;
+        line-height: 1.6;
+        overflow-wrap: anywhere;
       }
-      @media (max-width: 520px) {
-        .steps {
-          grid-template-columns: 1fr;
-        }
+      #landing #share {
+        margin-top: 8px;
+      }
+      #landing .ghost,
+      #landing .closing-link {
+        display: inline-block;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--secondary);
+        text-decoration: underline;
+        text-decoration-color: rgba(255, 255, 255, 0.3);
+        text-underline-offset: 5px;
+        cursor: pointer;
+      }
+      #landing .ghost {
+        min-height: 44px;
+        padding: 10px 6px;
+        font-size: 13px;
+      }
+      #landing #try-mouse {
+        margin-top: 14px;
+      }
+      #landing :is(button, a):focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 5px;
+      }
+      #landing .feature {
+        padding: clamp(80px, 10vw, 160px) max(20px, env(safe-area-inset-left), env(safe-area-inset-right));
+      }
+      #landing .feature:nth-of-type(3) {
+        background: #0b0b0d;
+      }
+      #landing h2 {
+        font-size: clamp(36px, 5.5vw, 76px);
+      }
+      #landing .feature-copy {
+        max-width: 650px;
+        margin: 24px auto 0;
+        color: var(--secondary);
+        font-size: clamp(17px, 1.6vw, 22px);
+        line-height: 1.5;
+        text-wrap: pretty;
+      }
+      #landing .product-image {
+        width: 100%;
+        max-width: 1280px;
+        aspect-ratio: 16 / 10;
+        margin: clamp(40px, 5vw, 72px) auto 0;
+        border-radius: 24px;
+        background-color: #111114;
+        background-position: center;
+        background-size: cover;
+      }
+      #landing .room-image { background-image: url('./landing/room.jpg'); }
+      #landing .fold-image { background-image: url('./landing/fold.jpg'); }
+      #landing .creature-image { background-image: url('./landing/creature.jpg'); }
+      #landing .facts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 48px 20px;
+        list-style: none;
+      }
+      #landing .facts li {
+        padding: 24px;
+        font-size: clamp(20px, 2vw, 28px);
+        line-height: 1.25;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+        text-wrap: balance;
+      }
+      #landing .facts li + li {
+        border-left: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      #landing .closing {
+        padding: clamp(100px, 12vw, 200px) 20px 0;
+      }
+      #landing .closing-link {
+        margin-top: 28px;
+        padding: 12px 0;
+        color: #fff;
+        font-size: 17px;
+      }
+      #landing footer {
+        padding: 100px 20px max(32px, env(safe-area-inset-bottom));
+        color: var(--secondary);
+        font-size: 11px;
+        line-height: 1.6;
+      }
+      #landing [data-reveal] {
+        transition: opacity 800ms ease, transform 800ms cubic-bezier(0.2, 0.65, 0.3, 1);
+      }
+      #landing .reveal-pending {
+        opacity: 0;
+        transform: translateY(24px);
+      }
+      @media (hover: hover) {
+        #landing .primary:hover:not(:disabled) { background: #e8e8ed; }
+        #landing .secondary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+        #landing :is(.ghost, .closing-link):hover { color: #fff; text-decoration-color: currentColor; }
+      }
+      @media (max-width: 600px) {
+        #landing .hero { padding-top: 72px; padding-bottom: 56px; }
+        #landing .buttons { gap: 10px; }
+        #landing .buttons button { padding: 14px 18px; font-size: 14px; }
+        #landing .product-image { aspect-ratio: 4 / 5; }
+        #landing .facts { grid-template-columns: 1fr; max-width: 400px; padding-top: 24px; padding-bottom: 24px; }
+        #landing .facts li { padding: 28px 0; }
+        #landing .facts li + li { border-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.14); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #landing { scroll-behavior: auto; }
+        #landing [data-reveal],
+        #landing .buttons button { transition: none; }
+        #landing .reveal-pending { opacity: 1; transform: none; }
       }
     </style>
   </head>
   <body>
     <div id="scene-container"></div>
     <div id="landing">
-      <div class="brand"><img src="./icon.svg" alt="" />Foldlings</div>
-      <div class="card">
-        <h1>Fold paper with your bare hands.</h1>
-        <p>Every puzzle you solve becomes a little origami creature that moves into your room — and is still there next time.</p>
-        <ul class="steps">
-          <li><b>Sit at a table</b>The mat lands on it. Everything is within arm's reach.</li>
-          <li><b>Pinch and fold</b>Pick up a corner and lay it over. Creases snap into place.</li>
-          <li><b>Match the card</b>Fold the shape shown on the card to set a creature free.</li>
-        </ul>
-        <div class="buttons">
-          <button id="play-ar" class="primary" disabled>Play in your room</button>
-          <button id="play-vr" class="secondary" disabled>Play in VR</button>
+      <section class="hero" id="landing-top" aria-labelledby="hero-title">
+        <div class="hero-content">
+          <p class="eyebrow">Foldlings</p>
+          <h1 id="hero-title">Fold paper.<br />Bring it to life.</h1>
+          <p class="hero-description">A hand-tracked origami game for Meta Quest. Fold on your real table, and every puzzle you solve becomes a little paper creature that lives in your room.</p>
+          <div class="buttons">
+            <button id="play-ar" class="primary" disabled>Play in your room</button>
+            <button id="play-vr" class="secondary" disabled>Play in VR</button>
+          </div>
+          <div class="note" id="note" role="status">Loading…</div>
+          <div class="note" id="share" hidden></div>
+          <button id="try-mouse" class="ghost" hidden>Try it here with a mouse</button>
         </div>
-        <div class="note" id="note">Loading…</div>
-        <button id="try-mouse" class="ghost" hidden>Try it here with a mouse</button>
-        <div class="note" id="share" hidden></div>
-      </div>
+      </section>
+      <section class="feature" aria-labelledby="room-title">
+        <div data-reveal>
+          <h2 id="room-title">Your room is the board.</h2>
+          <p class="feature-copy">It reads your table and walls, lays the mat where it fits, and remembers it next time.</p>
+        </div>
+        <div class="product-image room-image" data-reveal aria-hidden="true"></div>
+      </section>
+      <section class="feature" aria-labelledby="fold-title">
+        <div data-reveal>
+          <h2 id="fold-title">Nothing to hold.</h2>
+          <p class="feature-copy">Pinch the paper and lay it over. The crease follows your fingers and snaps into place.</p>
+        </div>
+        <div class="product-image fold-image" data-reveal aria-hidden="true"></div>
+      </section>
+      <section class="feature" aria-labelledby="creature-title">
+        <div data-reveal>
+          <h2 id="creature-title">Then it wakes up.</h2>
+          <p class="feature-copy">Each solve folds the sheet into one of eight creatures. It looks at you, calls in its own voice, and stays in your room.</p>
+        </div>
+        <div class="product-image creature-image" data-reveal aria-hidden="true"></div>
+      </section>
+      <ul class="facts" data-reveal aria-label="More to discover">
+        <li>80 levels in 8 worlds</li>
+        <li>A new fold every day</li>
+        <li>Make and share your own</li>
+      </ul>
+      <section class="closing" data-reveal aria-labelledby="closing-title">
+        <h2 id="closing-title">Fold your first one.</h2>
+        <a class="closing-link" href="#landing-top">Play in your room</a>
+      </section>
+      <footer>Foldlings. Works on Meta Quest 3 and 3S in the Quest Browser.</footer>
     </div>
     <script type="module" src="/src/index.ts"></script>
   </body>

@@ -1,6 +1,6 @@
 /**
  * The flat page shown before entering the headset experience: what the game
- * is, three steps, and buttons for passthrough or VR.
+ * is, product details, and buttons for passthrough or VR.
  */
 
 import { SessionMode, World } from '@iwsdk/core';
@@ -21,6 +21,7 @@ export async function setupLanding(world: World) {
   const vr = document.getElementById('play-vr') as HTMLButtonElement;
   const note = document.getElementById('note')!;
   const mouse = document.getElementById('try-mouse') as HTMLButtonElement;
+  setupScrollReveal(landing);
 
   const [arOk, vrOk] = await Promise.all([supported('immersive-ar'), supported('immersive-vr')]);
   ar.disabled = !arOk;
@@ -56,6 +57,34 @@ export async function setupLanding(world: World) {
   world.renderer.xr.addEventListener('sessionend', () => landing.classList.remove('hidden'));
 }
 
+/** Progressive enhancement: content stays visible without animation support. */
+function setupScrollReveal(landing: HTMLElement) {
+  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (motion.matches || !('IntersectionObserver' in window)) return;
+
+  const sections = landing.querySelectorAll<HTMLElement>('[data-reveal]');
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      entry.target.classList.remove('reveal-pending');
+      observer.unobserve(entry.target);
+    }
+  }, { root: landing, threshold: 0.08 });
+
+  for (const section of sections) {
+    section.classList.add('reveal-pending');
+    observer.observe(section);
+  }
+
+  const revealAll = () => {
+    if (!motion.matches) return;
+    observer.disconnect();
+    sections.forEach((section) => section.classList.remove('reveal-pending'));
+    motion.removeEventListener('change', revealAll);
+  };
+  motion.addEventListener('change', revealAll);
+}
+
 /** The newest player-made puzzle, with a link a friend can open. */
 function showShare() {
   const el = document.getElementById('share');
@@ -79,4 +108,3 @@ function showShare() {
   el.append(copy);
   el.hidden = false;
 }
-

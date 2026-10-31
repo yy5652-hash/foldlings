@@ -868,7 +868,7 @@ export class FoldGame {
     this.idle = busy ? 0 : this.idle + dt;
     if (this.messageTimer > 0) {
       this.messageTimer -= dt;
-      this.guide.setCaption(this.messageTimer > 0 ? this.message : '');
+      this.guide.setCaption(this.messageTimer > 0 && this.stageOn && !this.hintsOff ? this.message : '');
       this.guide.update(dt);
       return;
     }
@@ -876,12 +876,12 @@ export class FoldGame {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) {
         this.guide.hide();
-        this.guide.setCaption(busy ? '' : this.captionFor());
+        this.guide.setCaption(busy || !this.stageOn || this.hintsOff ? '' : this.captionFor());
       }
     } else {
-      this.guide.setCaption(this.solved ? '' : this.captionFor());
+      this.guide.setCaption(this.solved || !this.stageOn || this.hintsOff ? '' : this.captionFor());
       const wait = this.folds === 0 ? 1.2 : 6;
-      if (this.tutorial && !busy && !this.guide.showing && this.idle > wait) {
+      if (this.stageOn && !this.hintsOff && this.tutorial && !busy && !this.guide.showing && this.idle > wait) {
         const next = this.nextFold();
         if (next) this.guide.show(this.paper, next);
       }
@@ -994,10 +994,12 @@ export class FoldGame {
   /** Clears the mat's controls and hints away for the opening, then fades them back. */
   setStage(on: boolean) {
     this.stageOn = on;
-    this.guide.root.visible = on && this.guide.root.visible;
+    if (!on) this.guide.hide();
     this.board.setHintsVisible(on);
   }
   private stageOn = true;
+  /** Film capture: no tutorial lines or goal marks, just the paper. */
+  hintsOff = false;
   private stageK = 1;
   private stageShown = 1;
 

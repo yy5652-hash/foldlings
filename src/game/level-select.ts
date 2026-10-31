@@ -149,8 +149,7 @@ export class LevelSelect {
     g.textAlign = 'left';
     g.fillStyle = INK.secondary;
     setFont(g, 22, 400);
-    const link = `${location.host}${location.pathname}?p=CODE`;
-    g.fillText(mine.length ? `Share a code: ${link}` : 'Fold anything and save it as a puzzle', PAD + 76, 112, PX - PAD * 2 - 240);
+    g.fillText(mine.length ? 'Send a code to a friend, or open it with ?p=CODE' : 'Fold anything and save it as a puzzle', PAD + 76, 112, PX - PAD * 2 - 240);
     this.levelTiles().forEach((t, i) => {
       this.card(g, t);
       const cx = t.x + t.w / 2;

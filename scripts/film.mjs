@@ -71,6 +71,10 @@ export default async function ({ page, frame, cdp, signal }) {
     return frame.evaluate(([m, q]) => window.IWER_DEVICE.remote.dispatch(m, q), [method, p]);
   };
 
+  // A longer lens than the headset's: {"fov": 50} is the vertical angle in degrees.
+  await frame.evaluate((deg) => {
+    window.IWER_DEVICE.fovy = (deg * Math.PI) / 180;
+  }, shot.fov ?? 90);
   // Fresh session at the new size.
   await frame.evaluate(async (setup) => {
     const w = window.__foldlings?.world;
@@ -193,12 +197,101 @@ export default async function ({ page, frame, cdp, signal }) {
     }
     return true;
   };
+  // {"cam": {pos, look, duration}} moves the camera so that it looks at a point;
+  // with no duration it jumps there.
+  const orient = (pos, look) => {
+    const f = [look.x - pos.x, look.y - pos.y, look.z - pos.z];
+    const l = Math.hypot(...f) || 1;
+    return {
+      pitch: (Math.asin(f[1] / l) * 180) / Math.PI,
+      yaw: (Math.atan2(-f[0], -f[2]) * 180) / Math.PI,
+      roll: 0,
+    };
+  };
+  const cam = async (opt) => {
+    const pos = await resolve(opt.pos);
+    const look = await resolve(opt.look);
+    const orientation = orient(pos, look);
+    if (!opt.duration) return remote('set_transform', { device: 'headset', position: pos, orientation });
+    const moving = remote('animate_to', { device: 'headset', position: pos, orientation, duration: opt.duration, easing: opt.easing ?? 'minimum-jerk' });
+    // "drift": let the move run on while the next steps play.
+    return opt.drift ? null : moving;
+  };
+  // {"follow": {kind, offset, seconds}} keeps the camera beside a flying creature.
+  const follow = async (opt) => {
+    const kind = opt.kind === '@' ? await frame.evaluate(() => window.__filmKind) : opt.kind;
+    await frame.evaluate(({ kind, offset, seconds, smooth, up }) => new Promise((done) => {
+      const f = window.__foldlings;
+      const start = performance.now();
+      let tx = null;
+      const tick = () => {
+        const list = f.zoo.positions().filter((c) => c.kind === kind);
+        const c = list[list.length - 1];
+        if (c) {
+          if (!tx) tx = [...c.p];
+          for (let i = 0; i < 3; i++) tx[i] += (c.p[i] - tx[i]) * smooth;
+          const pos = { x: tx[0] + offset[0], y: tx[1] + offset[1], z: tx[2] + offset[2] };
+          const d = [tx[0] - pos.x, tx[1] + up - pos.y, tx[2] - pos.z];
+          const l = Math.hypot(...d) || 1;
+          window.IWER_DEVICE.remote.dispatch('set_transform', {
+            device: 'headset',
+            position: pos,
+            orientation: { pitch: (Math.asin(d[1] / l) * 180) / Math.PI, yaw: (Math.atan2(-d[0], -d[2]) * 180) / Math.PI, roll: 0 },
+          });
+        }
+        if (performance.now() - start < seconds * 1000) requestAnimationFrame(tick);
+        else done();
+      };
+      tick();
+    }), { kind, offset: opt.offset ?? [0.25, 0.1, 0.4], seconds: opt.seconds ?? 5, smooth: opt.smooth ?? 0.08, up: opt.up ?? 0 });
+  };
+  // {"track": {keys: [{t, pos, look}, ...]}} flies the camera through key poses
+  // for the rest of the take, every frame, whatever else is playing.
+  const track = async (opt) => {
+    const keys = [];
+    for (const k of opt.keys) keys.push({ t: k.t, pos: await resolve(k.pos), look: await resolve(k.look) });
+    await frame.evaluate((keys) => {
+      const start = performance.now();
+      const lerp = (a, b, k) => ({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k });
+      const device = window.IWER_DEVICE;
+      window.__filmTrack = { on: true };
+      const me = window.__filmTrack;
+      const apply = () => {
+        if (!me.on) return;
+        const t = (performance.now() - start) / 1000;
+        let i = 0;
+        while (i < keys.length - 2 && t > keys[i + 1].t) i++;
+        const a = keys[i];
+        const b = keys[Math.min(i + 1, keys.length - 1)];
+        const u = b === a ? 1 : Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t)));
+        const e = u * u * u * (u * (u * 6 - 15) + 10);
+        const pos = lerp(a.pos, b.pos, e);
+        const look = lerp(a.look, b.look, e);
+        const d = [look.x - pos.x, look.y - pos.y, look.z - pos.z];
+        const l = Math.hypot(...d) || 1;
+        const yaw = Math.atan2(-d[0], -d[2]);
+        const pitch = Math.asin(d[1] / l);
+        const [cy, sy, cp, sp] = [Math.cos(yaw / 2), Math.sin(yaw / 2), Math.cos(pitch / 2), Math.sin(pitch / 2)];
+        device.position.set(pos.x, pos.y, pos.z);
+        device.quaternion.set(cy * sp, sy * cp, -sy * sp, cy * cp);
+      };
+      const loop = () => {
+        apply();
+        if (me.on) requestAnimationFrame(loop);
+      };
+      window.__foldlings.world.onXRFrame(apply);
+      loop();
+    }, keys);
+  };
   for (const s of shot.steps) {
     if (signal?.aborted) break;
     const at = Date.now() - t0;
     if (s.mark) marks.push({ label: s.mark, ms: at });
     if (s.fold) results.push({ fold: !!(await fold(s.fold)) });
     if (s.tap) results.push({ tap: await tap(s.tap) });
+    if (s.cam) await cam(s.cam);
+    if (s.track) await track(s.track);
+    if (s.follow) await follow(s.follow);
     if (s.eval) results.push(await frame.evaluate((src) => new Function(`return (${src});`)(), s.eval));
     if (s.remote) {
       const r = await remote(s.remote, s.params ?? {});
@@ -207,6 +300,9 @@ export default async function ({ page, frame, cdp, signal }) {
     if (s.wait) await new Promise((r) => setTimeout(r, s.wait * 1000));
   }
   await cdp.send('Page.stopScreencast');
+  await frame.evaluate(() => {
+    if (window.__filmTrack) window.__filmTrack.on = false;
+  });
   const b64 = await frame.evaluate(async () => {
     const f = window.__filmAudio;
     if (!f) return '';

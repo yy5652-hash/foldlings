@@ -113,9 +113,17 @@ export class HandBodies {
   /** Frosted glass hands when real ones cannot be seen; a depth mask otherwise. */
   setGhost(on: boolean) {
     this.ghost = on;
-    this.mesh.visible = !on;
+    this.mesh.visible = !on && !this.hidden;
     this.dress();
   }
+
+  /** Film capture: no hands at all, not even a depth mask. */
+  hideAll(on: boolean) {
+    this.hidden = on;
+    this.mesh.visible = !on && !this.ghost;
+    this.dress();
+  }
+  private hidden = false;
 
   /** The SDK loads its hand models when input starts; pick them up as they come. */
   update(dt: number) {
@@ -137,7 +145,7 @@ export class HandBodies {
   private dress() {
     for (const m of this.sdkOutline) m.visible = false;
     for (const m of this.sdkFill) {
-      m.visible = this.ghost;
+      m.visible = this.ghost && !this.hidden;
       m.material = this.frosted;
       (m.material as MeshStandardMaterial).side = FrontSide;
     }

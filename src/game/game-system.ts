@@ -25,6 +25,7 @@ import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, st
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
+import { QualityGuard } from './quality.js';
 import { HandBodies } from './hand-bodies.js';
 import { Dimmer } from './dimmer.js';
 import { Hands } from './hands.js';
@@ -139,6 +140,7 @@ export class GameSystem extends createSystem({
   private occluderCheck = 0;
   private title = new TitleCard();
   private dimmer = new Dimmer();
+  private quality = new QualityGuard();
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
   private alwaysGhostHands = false;
@@ -263,10 +265,8 @@ export class GameSystem extends createSystem({
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
     this.game.boardRoot.add(this.title.paper);
-    this.title.onGathered = () => {
-      this.game.hidePaper(false);
-      this.game.setStage(true);
-    };
+    this.title.onGathered = () => this.game.hidePaper(false);
+    this.title.onFinished = () => this.game.setStage(true);
     this.world.scene.add(this.dimmer.mesh);
     this.handBodies = new HandBodies(this.world);
     if (this.progress.muted) {
@@ -327,6 +327,30 @@ export class GameSystem extends createSystem({
         },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
         hands: () => this.hands,
+        replayTitle: () => {
+          this.titleShown = false;
+        },
+        /** A well-played save, for filming the menus with something in them. */
+        filmNoHands: (on: boolean) => this.handBodies.hideAll(on),
+        filmQuiet: (on: boolean) => {
+          this.game.hintsOff = on;
+          this.game.board.setHintsVisible(!on);
+        },
+        filmSeed: (unearned: string[] = []) => {
+          const p = this.progress;
+          p.best = {};
+          p.solved = [];
+          LEVELS.slice(0, 46).forEach((l, i) => {
+            p.best![l.id] = { stars: i % 7 === 3 ? 2 : 3, folds: l.par };
+            p.solved.push(l.id);
+          });
+          p.worlds = [0, 1, 2, 3];
+          p.badges = ACHIEVEMENTS.map((a) => a.id).filter((id) => !unearned.includes(id));
+          p.custom = [LEVELS[12], LEVELS[33], LEVELS[57]].map((l) => encodeFolds(l.solution));
+          const today = dayNumber();
+          p.daily = [today - 4, today - 3, today - 2, today - 1];
+          this.saveProgress();
+        },
         ghostHands: (on: boolean) => {
           this.alwaysGhostHands = on;
           this.handBodies.setGhost(on || this.mode === 'vr');
@@ -378,6 +402,16 @@ export class GameSystem extends createSystem({
     });
   }
 
+  /** Gives up the costliest extras if a headset cannot hold its frame rate. */
+  private lowerQuality() {
+    if (this.quality.level === 1) this.world.renderer.xr.setFoveation(1);
+    if (this.quality.level === 2) {
+      this.key.castShadow = false;
+      this.game.board.setShadowCatcher(false);
+    }
+    console.info(`[foldlings] quality step ${this.quality.level}`);
+  }
+
   /** The room lowers its lights a little while paper comes to life. */
   private heroDim(): number {
     const c = this.celebrate;
@@ -394,7 +428,10 @@ export class GameSystem extends createSystem({
     const virtual = mode !== 'ar';
     this.vroom.root.visible = virtual;
     this.desk.visible = virtual;
-    this.game.board.setShadowCatcher(!virtual);
+    // Dusk light from the study's window; a neutral lamp over a real table.
+    this.key.color.set(virtual ? 0xffc089 : 0xffe8cc);
+    this.key.intensity = virtual ? 2.7 : 2.2;
+    this.game.board.setShadowCatcher(!virtual && this.quality.level < 2);
     if (virtual) this.zoo.setSurfaces(this.vroom.surfaces());
   }
 
@@ -828,6 +865,8 @@ export class GameSystem extends createSystem({
     }
     this.title.update(delta);
     this.handBodies.update(delta);
+    this.vroom.update(delta);
+    if (this.world.renderer.xr.isPresenting && this.quality.update(delta)) this.lowerQuality();
     this.dimmer.update(delta, this.mode === 'ar' ? Math.max(this.title.dim * 0.62, this.heroDim()) : 0, this.world.camera);
     this.game.boardRoot.getWorldPosition(this.key.target.position);
     this.keyTmp.copy(this.keyOffset).applyQuaternion(this.game.boardRoot.quaternion);
@@ -847,7 +886,7 @@ export class GameSystem extends createSystem({
     this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
     this.game.board.setCardAway(
-      this.title.playing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
+      this.title.playing || !!this.celebrate || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
       delta,
     );
     this.world.camera.getWorldPosition(this.ear);

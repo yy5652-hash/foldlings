@@ -129,15 +129,15 @@ class HomeMarker {
   constructor() {
     this.root.name = 'HomeMarker';
     this.dots = new InstancedMesh(
-      new SphereGeometry(0.0045, 8, 6),
-      new MeshBasicMaterial({ color: 0x5ee8ff, transparent: true, depthWrite: false, blending: AdditiveBlending }),
+      new SphereGeometry(0.003, 8, 6),
+      new MeshBasicMaterial({ color: 0xfff1dc, transparent: true, depthWrite: false, blending: AdditiveBlending }),
       this.n,
     );
     this.dots.frustumCulled = false;
-    const ring = new RingGeometry(0.045, 0.055, 40);
+    const ring = new RingGeometry(0.05, 0.053, 48);
     this.ring = new Mesh(
       ring,
-      new MeshBasicMaterial({ color: 0x5ee8ff, transparent: true, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
+      new MeshBasicMaterial({ color: 0xfff1dc, transparent: true, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
     );
     this.root.add(this.dots, this.ring);
     this.root.visible = false;

@@ -146,7 +146,7 @@ export function customLevel(code: string, n: number): Level {
     id: `my-${code}`,
     name: n >= 0 ? `My puzzle ${n + 1}` : 'Shared puzzle',
     creature: KINDS[h % KINDS.length],
-    look: LOOKS[(h >> 3) % LOOKS.length],
+    look: LOOKS[(h >>> 3) % LOOKS.length],
     solution: folds,
     world: -3,
     slot: Math.max(0, n),
