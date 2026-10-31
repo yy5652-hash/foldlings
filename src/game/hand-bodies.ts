@@ -8,7 +8,9 @@
 import {
   AdditiveBlending,
   BufferGeometry,
+  CanvasTexture,
   CapsuleGeometry,
+  CircleGeometry,
   Float32BufferAttribute,
   FrontSide,
   InstancedMesh,
@@ -17,6 +19,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  NoColorSpace,
   Quaternion,
   SphereGeometry,
   Vector3,
@@ -67,6 +70,29 @@ const MAX = LINKS.length * 2;
 const Y = new Vector3(0, 1, 0);
 const FALLBACK_RADIUS = 0.008;
 
+let reticle: CanvasTexture | null = null;
+
+/** The pointer's mark on whatever it rests on: a small targeting ring. */
+function reticleTexture(): CanvasTexture {
+  if (!reticle) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    g.strokeStyle = '#8fe6ff';
+    g.lineWidth = 7;
+    g.beginPath();
+    g.arc(64, 64, 42, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = '#e2faff';
+    g.beginPath();
+    g.arc(64, 64, 7, 0, Math.PI * 2);
+    g.fill();
+    reticle = new CanvasTexture(c);
+    reticle.colorSpace = NoColorSpace;
+  }
+  return reticle;
+}
+
 function frostedGlass(): MeshStandardMaterial {
   const m = new MeshStandardMaterial({
     color: 0xeef0f4,
@@ -98,6 +124,7 @@ export class HandBodies {
   private frosted = frostedGlass();
   private sdkFill: Mesh[] = [];
   private sdkOutline: Mesh[] = [];
+  private cursors: Mesh[] = [];
   private clock = 0;
   private player = new Matrix4();
   private pos = JOINTS.map(() => new Vector3());
@@ -155,12 +182,16 @@ export class HandBodies {
     this.clock += dt;
     if (this.clock < 0.7) return;
     this.clock = 0;
-    if (this.sdkFill.length >= 2) return;
+    if (this.sdkFill.length >= 2 && this.cursors.length >= 2) return;
     this.sdkFill = [];
     this.sdkOutline = [];
+    this.cursors = [];
     this.world.scene.traverse((o) => {
       const m = o as Mesh;
-      if (!m.isMesh || !m.name.endsWith('handMeshNode')) return;
+      if (!m.isMesh) return;
+      // The SDK's pointer cursor is the one mesh drawn after everything else.
+      if (m.renderOrder === Infinity && (m.geometry as CircleGeometry).type === 'CircleGeometry') this.cursors.push(m);
+      if (!m.name.endsWith('handMeshNode')) return;
       if (m.renderOrder === 999) this.sdkOutline.push(m);
       else this.sdkFill.push(m);
     });
@@ -168,6 +199,13 @@ export class HandBodies {
   }
 
   private dress() {
+    for (const m of this.cursors) {
+      const mat = m.material as MeshBasicMaterial;
+      mat.map = reticleTexture();
+      mat.toneMapped = false;
+      mat.visible = !this.hidden;
+      mat.needsUpdate = true;
+    }
     for (const m of this.sdkOutline) m.visible = false;
     for (const m of this.sdkFill) {
       m.visible = this.ghost && !this.hidden;

@@ -86,7 +86,7 @@ interface Progress {
 }
 
 /** How far the real room stays dimmed while the projection is running. */
-const THEATRE_DIM = 0.62;
+const THEATRE_DIM = 0.68;
 
 export class GameSystem extends createSystem({
   planes: { required: [XRPlane] },

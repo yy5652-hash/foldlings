@@ -378,7 +378,7 @@ export class BoardView {
   }
 
   /** A live reading beside the crease being made. */
-  private measure = new TextLabel(0.0185, 56, 500, 'rgba(255,190,150,1)', LAYER.overlay, MONO);
+  private measure = new TextLabel(0.015, 56, 500, 'rgba(255,190,150,1)', LAYER.overlay, MONO);
 
   setMeasure(line: Line | null, fold: number, par: number, solves: boolean) {
     const m = this.measure.mesh;
@@ -396,7 +396,7 @@ export class BoardView {
     const dx = -line.ny;
     const dy = line.nx;
     const sign = dy < 0 ? 1 : -1;
-    m.position.set(x + dx * sign * 0.17, 0.016, -(y + dy * sign * 0.17));
+    m.position.set(x + dx * sign * 0.16, 0.014, -(y + dy * sign * 0.16));
   }
 
   /** Hides the crease, hint and goal marks during the opening. */

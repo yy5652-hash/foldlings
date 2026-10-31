@@ -22,7 +22,7 @@ import {
 import { INK, setFont } from './glass.js';
 import type { Surface } from './room.js';
 
-const DURATION = 4.2;
+const DURATION = 5.4;
 
 const vertex = /* glsl */ `
 attribute vec2 surf;
@@ -176,7 +176,7 @@ export class RoomScan {
         label = new Sprite(
           new SpriteMaterial({ map: labelTexture(niceLabel(s)), transparent: true, depthWrite: false, depthTest: false }),
         );
-        label.scale.set(0.3, 0.056, 1);
+        label.scale.set(0.36, 0.0675, 1);
         label.position.copy(s.center).addScaledVector(s.normal, s.kind === 'wall' ? 0.05 : 0.09);
         label.renderOrder = 81;
         label.visible = false;
@@ -204,7 +204,7 @@ export class RoomScan {
   update(dt: number) {
     if (this.t < 0) return;
     this.t += dt;
-    const radius = Math.min(8, this.t * 3.2);
+    const radius = Math.min(8, this.t * 2.1);
     for (const it of this.items) {
       const end = it.chosen ? DURATION : DURATION - 0.8;
       const fade = this.t < end - 1.2 ? 1 : Math.max(0, (end - this.t) / 1.2);
