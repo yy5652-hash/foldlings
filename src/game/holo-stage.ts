@@ -18,6 +18,7 @@ import {
   NoColorSpace,
   Object3D,
   PlaneGeometry,
+  Points,
   ShaderMaterial,
   Vector3,
   World,
@@ -92,6 +93,30 @@ function additive(map: CanvasTexture, opacity = 1): MeshBasicMaterial {
     side: DoubleSide,
   });
 }
+
+const MOTE_VERT = /* glsl */ `
+uniform float uTime;
+uniform float uHeight;
+attribute vec3 aSeed;
+varying float vA;
+void main() {
+  float h = fract(aSeed.x + uTime * (0.05 + aSeed.y * 0.07));
+  float a = aSeed.z * 6.283 + uTime * 0.12;
+  float r = (0.05 + 0.15 * sqrt(aSeed.y)) * (0.7 + 0.55 * h);
+  vec3 p = vec3(cos(a) * r, h * uHeight, sin(a) * r);
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  vA = sin(h * 3.14159) * (0.4 + 0.6 * aSeed.z);
+  gl_PointSize = clamp(3.2 / -mv.z, 1.0, 5.0);
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const MOTE_FRAG = /* glsl */ `
+uniform float uPower;
+varying float vA;
+void main() {
+  float d = length(gl_PointCoord - 0.5) * 2.0;
+  gl_FragColor = vec4(vec3(0.5, 0.88, 1.0) * (1.0 - d * d) * vA * uPower, 0.0);
+}`;
 
 const SHAFT_VERT = /* glsl */ `
 varying float vH;
@@ -185,6 +210,12 @@ export class HoloStage {
   readonly labels = new Group();
   private ringA: Mesh;
   private ringB: Mesh;
+  /** Rings standing in the air around the body, and flat ones up the shaft. */
+  private gimbal: Group;
+  private gimbalRings: { mesh: Mesh; speed: number; tilt: [number, number] }[] = [];
+  private levels: Mesh[] = [];
+  private frame: LineSegments<BufferGeometry>;
+  private motes: Points<BufferGeometry, ShaderMaterial>;
   private shaft: Mesh<CylinderGeometry, ShaderMaterial>;
   private slice: Mesh<PlaneGeometry, ShaderMaterial>;
   private sliceLabel: TextLabel;
@@ -260,6 +291,91 @@ export class HoloStage {
     this.slice.visible = false;
     this.slice.raycast = () => {};
     this.root.add(this.slice);
+
+    this.gimbal = new Group();
+    this.gimbal.name = 'Gimbal';
+    const ringTex = reticle(1024, 0.8, 1);
+    const ringTex2 = reticle(1024, 0.8, 0);
+    const tilts: [number, number, number, CanvasTexture, number][] = [
+      [1.25, 0.2, 0.46, ringTex, 0.09],
+      [1.95, -0.55, 0.52, ringTex2, -0.065],
+      [0.45, 1.1, 0.4, ringTex, 0.12],
+    ];
+    for (const [rx, ry, size, tex, speed] of tilts) {
+      const m = new Mesh(new PlaneGeometry(size, size), additive(tex, 0));
+      m.renderOrder = 61;
+      m.raycast = () => {};
+      this.gimbal.add(m);
+      this.gimbalRings.push({ mesh: m, speed, tilt: [rx, ry] });
+    }
+    this.gimbal.visible = false;
+    this.root.add(this.gimbal);
+    for (const [y, size] of [[0.1, 0.34], [0.2, 0.38], [0.33, 0.44]] as const) {
+      const m = new Mesh(new PlaneGeometry(size, size), additive(ringTex2, 0));
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = y;
+      m.renderOrder = 60;
+      m.raycast = () => {};
+      m.visible = false;
+      this.levels.push(m);
+      this.root.add(m);
+    }
+    // A measuring frame: corner brackets of a box, and a ruler up one edge.
+    const F: number[] = [];
+    const hx = 0.2;
+    const hz = 0.2;
+    const y0 = 0.03;
+    const y1 = 0.45;
+    const L = 0.05;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        for (const y of [y0, y1]) {
+          const dy = y === y0 ? L : -L;
+          const x = sx * hx;
+          const z = sz * hz;
+          F.push(x, y, z, x - sx * L, y, z, x, y, z, x, y, z - sz * L, x, y, z, x, y + dy, z);
+        }
+      }
+    }
+    for (let i = 0; i <= 21; i++) {
+      const y = y0 + i * 0.02;
+      const w = i % 5 === 0 ? 0.016 : 0.008;
+      F.push(hx, y, hz, hx + w, y, hz);
+    }
+    F.push(hx, y0, hz, hx, y1, hz);
+    const fg = new BufferGeometry();
+    fg.setAttribute('position', new Float32BufferAttribute(F, 3));
+    this.frame = new LineSegments(fg, holoLine(0x7fdcff, 0));
+    this.frame.renderOrder = 61;
+    this.frame.raycast = () => {};
+    this.frame.visible = false;
+    this.root.add(this.frame);
+    const seeds = new Float32Array(420 * 3);
+    let r = 7;
+    for (let i = 0; i < seeds.length; i++) {
+      r = (r * 16807) % 2147483647;
+      seeds[i] = r / 2147483647;
+    }
+    const mg = new BufferGeometry();
+    mg.setAttribute('position', new Float32BufferAttribute(new Float32Array(420 * 3), 3));
+    mg.setAttribute('aSeed', new Float32BufferAttribute(seeds, 3));
+    this.motes = new Points(
+      mg,
+      new ShaderMaterial({
+        vertexShader: MOTE_VERT,
+        fragmentShader: MOTE_FRAG,
+        transparent: true,
+        depthWrite: false,
+        premultipliedAlpha: true,
+        toneMapped: false,
+        uniforms: { uTime: HOLO_TIME, uHeight: { value: 0.5 }, uPower: { value: 0 } },
+      }),
+    );
+    this.motes.frustumCulled = false;
+    this.motes.renderOrder = 63;
+    this.motes.raycast = () => {};
+    this.motes.visible = false;
+    this.root.add(this.motes);
 
     this.sliceLabel = new TextLabel(0.0125, 40, 500, 'rgba(170,235,255,0.95)', 120, MONO);
     this.labels.add(this.sliceLabel.mesh);
@@ -370,6 +486,22 @@ export class HoloStage {
     }
     this.shaft.material.uniforms.uPower.value = this.power * 0.5;
     this.slice.material.uniforms.uPower.value = this.power;
+    const full = !this.lowPower;
+    this.gimbal.visible = this.frame.visible = this.motes.visible = on;
+    this.gimbal.position.y = this.baseY + this.height * 0.42;
+    for (const g of this.gimbalRings) {
+      g.mesh.rotation.set(g.tilt[0], g.tilt[1], this.clock * g.speed);
+      (g.mesh.material as MeshBasicMaterial).opacity = this.power * (full ? 0.5 : 0.3);
+    }
+    for (const m of this.levels) {
+      m.visible = on && full;
+      (m.material as MeshBasicMaterial).opacity = this.power * 0.3;
+    }
+    this.levels[0].rotation.z = this.clock * 0.14;
+    this.levels[1].rotation.z = -this.clock * 0.1;
+    this.levels[2].rotation.z = this.clock * 0.07;
+    (this.frame.material as MeshBasicMaterial).opacity = this.power * 0.62;
+    this.motes.material.uniforms.uPower.value = this.power;
 
     // The slice travels up and down through the body, easing at each end.
     const u = 0.5 - 0.5 * Math.cos(this.clock * 0.72);

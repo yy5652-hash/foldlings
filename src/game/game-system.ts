@@ -18,15 +18,16 @@ import {
   XRPlane,
 } from '@iwsdk/core';
 import { FoldSpec, paperBounds } from '../fold/paper.js';
-import { Creature } from './creatures.js';
-import type { Rig } from './creature-models.js';
 import { FoldGame } from './fold-game.js';
 import { CreatureKind, customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic } from './sfx.js';
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
+import { Creature, HABITAT } from './creatures.js';
 import { HoloStage } from './holo-stage.js';
+import { RoomModel } from './room-model.js';
+import { HoloVolume } from './holo-volume.js';
 import { tickHolo } from './holo.js';
 import { QualityGuard } from './quality.js';
 import { HandBodies } from './hand-bodies.js';
@@ -87,6 +88,8 @@ interface Progress {
 
 /** How far the real room stays dimmed while the projection is running. */
 const THEATRE_DIM = 0.68;
+/** How long a creature from the album stays on the table. */
+const INSPECT_SECONDS = 12;
 
 export class GameSystem extends createSystem({
   planes: { required: [XRPlane] },
@@ -147,6 +150,7 @@ export class GameSystem extends createSystem({
   private title = new TitleCard();
   private dimmer = new Dimmer();
   private stage!: HoloStage;
+  private roomModel = new RoomModel();
   private demo: { c: Creature; t: number } | null = null;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
@@ -217,6 +221,7 @@ export class GameSystem extends createSystem({
       onSave: (folds) => this.saveCustom(folds),
     });
     this.album = new Album(this.world);
+    this.album.onInspect = (kind, look, times) => this.inspect(kind, look, times);
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
     this.world.createTransformEntity(this.badge.root, this.game.boardEntity);
     this.badge.root.position.set(0, 0.36, -0.12);
@@ -283,6 +288,8 @@ export class GameSystem extends createSystem({
     this.stage = new HoloStage(this.world);
     this.game.boardRoot.add(this.stage.root);
     this.world.scene.add(this.stage.labels);
+    this.game.boardRoot.add(this.roomModel.root);
+    this.roomModel.root.position.set(0, 0.25, -0.03);
     if (this.progress.muted) {
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
@@ -341,14 +348,8 @@ export class GameSystem extends createSystem({
         },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
         hands: () => this.hands,
-        holoDemo: (kind: CreatureKind = 'crane') => this.showDemo(kind),
-        holoDemoEnd: () => {
-          this.demo?.c.root.removeFromParent();
-          this.demo = null;
-          this.stage.dismiss();
-          this.game.hidePaper(false);
-          this.game.setStage(true);
-        },
+        inspect: (kind: CreatureKind = 'crane', look = 0, times = 3) => this.inspect(kind, look, times),
+        inspectEnd: () => this.endInspect(),
         replayTitle: () => {
           this.titleShown = false;
         },
@@ -424,6 +425,20 @@ export class GameSystem extends createSystem({
     });
   }
 
+  /** Your scanned room in miniature, from the live scan. */
+  private showRoomModel() {
+    const marks = this.zoo.positions().map((c) => new Vector3().fromArray(c.p));
+    marks.push(this.game.boardRoot.getWorldPosition(new Vector3()));
+    this.roomModel.show(this.roomSurfaces(), this.meshInfos(), marks);
+    if (!this.roomModel.showing) return;
+    this.stage.present(0.05, 0.4);
+    this.stage.setCallout(0, this.roomModel.root, [0.1, 0.1, 0], 0.2, 0.06, 'YOUR ROOM', `${this.roomModel.width.toFixed(1)} X ${this.roomModel.depth.toFixed(1)} M`);
+    this.stage.setCallout(1, this.roomModel.root, [-0.1, 0, 0], -0.2, 0.02, `${this.roomModel.count} SURFACES`, 'READ JUST NOW');
+    this.roomModelOn = true;
+  }
+  private modelIn = -1;
+  private roomModelOn = false;
+
   /** Labels, slice and vitals around a creature on the projection table. */
   private updatePresentation(dt: number) {
     const p = this.zoo.presentation();
@@ -474,26 +489,35 @@ export class GameSystem extends createSystem({
   private wasAwake = false;
   private beatIn = 0;
 
-  /** The look frame: one creature, large, under the full projection. */
-  private showDemo(kind: CreatureKind) {
-    if (this.demo) {
-      this.demo.c.root.removeFromParent();
-    }
-    const i = WORLDS.findIndex((w) => w.kind === kind);
-    const c = new Creature(kind, LOOKS[Math.max(0, i * 10) % LOOKS.length]);
-    c.root.scale.setScalar(1.35);
+  /** Puts a kind from the album on the table, large, under the full projection. */
+  private inspect(kind: CreatureKind, look: number, times: number) {
+    this.endInspect();
+    this.album.hide();
+    const c = new Creature(kind, LOOKS[look % LOOKS.length]);
+    c.root.scale.setScalar(1.8);
     c.root.position.set(0, 0.17, -0.02);
     this.game.boardRoot.add(c.root);
     this.game.hidePaper(true);
     this.game.setStage(false);
-    const rig = (c as unknown as { rig: Rig }).rig;
-    for (const core of rig.cores) core.visible = true;
+    c.setPresenting(true);
     this.demo = { c, t: 0 };
-    this.stage.present(0.05, 0.36);
-    const body = c.root;
-    this.stage.setCallout(0, body, [0, 0.14, 0], 0.2, 0.05, kind.toUpperCase(), 'SPECIMEN 014');
-    this.stage.setCallout(1, body, [0.07, 0.02, 0], 0.2, -0.05, 'FACETS 46', 'FOLDS 3  PAR 3');
-    this.stage.setCallout(2, body, [-0.07, 0.04, 0], -0.2, 0.0, 'CORE', 'INNER STRUCTURE');
+    this.stage.present(0.05, 0.42);
+    const [head, a, b] = c.anchors;
+    this.stage.setCallout(0, head, [0, 0, 0], 0.2, 0.07, kind.toUpperCase(), times > 0 ? `FOLDED ${times} ${times === 1 ? 'TIME' : 'TIMES'}` : 'IN YOUR ZOO');
+    this.stage.setCallout(1, a, [0, 0, 0], 0.2, -0.03, `${c.facets} FACETS`, `${HABITAT[kind].toUpperCase()} HABITAT`);
+    this.stage.setCallout(2, b, [0, 0, 0], -0.2, 0.04, 'INNER LAYER', 'SHOWN IN AMBER');
+    sfx.power();
+  }
+
+  private endInspect() {
+    if (!this.demo) return;
+    this.demo.c.setPresenting(false);
+    this.demo.c.root.removeFromParent();
+    this.demo.c.dispose();
+    this.demo = null;
+    this.stage.dismiss();
+    this.game.hidePaper(false);
+    this.game.setStage(true);
   }
 
   private updateDemo(dt: number) {
@@ -501,18 +525,22 @@ export class GameSystem extends createSystem({
     if (!d) return;
     d.t += dt;
     d.c.update(dt);
-    d.c.root.rotation.y = d.t * 0.3;
-    const rig = (d.c as unknown as { rig: Rig }).rig;
-    const e = 0.5 - 0.5 * Math.cos(d.t * 0.4);
-    rig.holo.uniforms.uExplode.value = 0.016 * e * e;
-    rig.holo.uniforms.uScanY.value = this.stage.scanY;
-    rig.core.uniforms.uScanY.value = this.stage.scanY;
+    d.c.root.rotation.y = d.t * 0.42;
+    // Pulled apart and closed again, slowly, to show how it is made.
+    const e = 0.5 - 0.5 * Math.cos(d.t * 0.7);
+    d.c.setExplode(0.013 * e * e);
+    d.c.setScan(this.stage.scanY);
+    if (d.t > INSPECT_SECONDS) this.endInspect();
   }
 
   /** Gives up the costliest extras if a headset cannot hold its frame rate. */
   private lowerQuality() {
     if (this.quality.level === 1) this.world.renderer.xr.setFoveation(1);
-    if (this.quality.level === 2) this.stage.lowPower = true;
+    if (this.quality.level === 1) HoloVolume.steps = 18;
+    if (this.quality.level === 2) {
+      this.stage.lowPower = true;
+      HoloVolume.steps = 12;
+    }
     console.info(`[foldlings] quality step ${this.quality.level}`);
   }
 
@@ -601,6 +629,7 @@ export class GameSystem extends createSystem({
       if (surfaces.length) {
         this.lastScan = this.sessionTime;
         this.scan.start(surfaces, head.getWorldPosition(new Vector3()), next.onSurface ? next.position : null);
+        this.modelIn = this.settings.reduceMotion ? -1 : 1.3;
       }
     }
     console.info(
@@ -958,7 +987,7 @@ export class GameSystem extends createSystem({
     }
     if (this.celebrate) this.updateCelebration(delta);
     // The title unfolds once the mat has settled after the room scan.
-    if (!this.settings.reduceMotion && !this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active) {
+    if (!this.settings.reduceMotion && !this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active && !this.roomModel.showing && this.modelIn <= 0) {
       this.titleShown = true;
       this.game.boardRoot.updateWorldMatrix(true, false);
       this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
@@ -976,8 +1005,17 @@ export class GameSystem extends createSystem({
     this.dimmer.update(delta, this.mode === 'ar' ? Math.max(this.settings.dimRoom ? THEATRE_DIM : 0, this.title.dim * 0.86, this.heroDim(), this.demo ? 0.84 : 0) : 0, this.world.camera);
     tickHolo(delta);
     this.stage.update(delta);
+    this.roomModel.update(delta);
+    if (this.modelIn > 0) {
+      this.modelIn -= delta;
+      if (this.modelIn <= 0) this.showRoomModel();
+    }
     this.updateDemo(delta);
     this.updatePresentation(delta);
+    if (this.roomModelOn && !this.roomModel.showing) {
+      this.roomModelOn = false;
+      if (!this.demo && !this.title.playing) this.stage.dismiss();
+    }
     this.game.boardRoot.getWorldPosition(this.key.target.position);
     this.keyTmp.copy(this.keyOffset).applyQuaternion(this.game.boardRoot.quaternion);
     this.key.position.copy(this.key.target.position).add(this.keyTmp);
@@ -996,7 +1034,7 @@ export class GameSystem extends createSystem({
     this.levelSelect.update(delta);
     this.settingsPanel.update(delta);
     this.game.board.setCardAway(
-      this.title.playing || !!this.celebrate || !!this.demo || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
+      this.title.playing || !!this.celebrate || !!this.demo || this.roomModel.showing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
       delta,
     );
     this.world.camera.getWorldPosition(this.ear);

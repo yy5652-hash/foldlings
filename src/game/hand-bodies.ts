@@ -21,6 +21,7 @@ import {
   MeshStandardMaterial,
   NoColorSpace,
   Quaternion,
+  ShaderMaterial,
   SphereGeometry,
   Vector3,
   World,
@@ -125,6 +126,7 @@ export class HandBodies {
   private sdkFill: Mesh[] = [];
   private sdkOutline: Mesh[] = [];
   private cursors: Mesh[] = [];
+  private rays: Mesh[] = [];
   private clock = 0;
   private player = new Matrix4();
   private pos = JOINTS.map(() => new Vector3());
@@ -186,11 +188,14 @@ export class HandBodies {
     this.sdkFill = [];
     this.sdkOutline = [];
     this.cursors = [];
+    this.rays = [];
     this.world.scene.traverse((o) => {
       const m = o as Mesh;
       if (!m.isMesh) return;
       // The SDK's pointer cursor is the one mesh drawn after everything else.
       if (m.renderOrder === Infinity && (m.geometry as CircleGeometry).type === 'CircleGeometry') this.cursors.push(m);
+      const ray = m.material as ShaderMaterial;
+      if (m.geometry.type === 'CylinderGeometry' && ray.uniforms?.opacity && ray.uniforms?.color) this.rays.push(m);
       if (!m.name.endsWith('handMeshNode')) return;
       if (m.renderOrder === 999) this.sdkOutline.push(m);
       else this.sdkFill.push(m);
@@ -199,6 +204,13 @@ export class HandBodies {
   }
 
   private dress() {
+    for (const m of this.rays) {
+      const mat = m.material as ShaderMaterial;
+      // The SDK sets the colour from its own constants; fix the hue in the shader.
+      mat.fragmentShader = mat.fragmentShader.replace('vec4(color,', 'vec4(vec3(0.42, 0.88, 1.0),');
+      mat.visible = !this.hidden;
+      mat.needsUpdate = true;
+    }
     for (const m of this.cursors) {
       const mat = m.material as MeshBasicMaterial;
       mat.map = reticleTexture();

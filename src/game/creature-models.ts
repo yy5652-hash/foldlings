@@ -22,8 +22,11 @@ import {
   Object3D,
   Vector3,
   ShaderMaterial,
+  InstancedBufferAttribute,
+  InstancedBufferGeometry,
+  Points,
 } from '@iwsdk/core';
-import { holoBody, holoCore, holoLine } from './holo.js';
+import { holoBody, holoCloud, holoCore, holoLine } from './holo.js';
 import type { CreatureKind } from './levels.js';
 
 export type P = [number, number, number];
@@ -60,11 +63,54 @@ export interface Rig {
   /** The inner layer, shown only while a creature is being presented. */
   core: ShaderMaterial;
   cores: Mesh[];
+  cloud: ShaderMaterial;
+  clouds: Points[];
   /** Every crease-line object, hidden on far-away creatures to save draw calls. */
   edges: LineSegments[];
 }
 
 const eyeMat = new MeshBasicMaterial({ vertexColors: true });
+
+/** Points scattered over the triangles, deterministically, so the editor agrees. */
+function cloudGeometry(pos: number[], normals: Float32Array, col: number[]): BufferGeometry {
+  const P: number[] = [];
+  const N: number[] = [];
+  const C: number[] = [];
+  const D: number[] = [];
+  let seed = 12345 + pos.length;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let t = 0; t + 8 < pos.length; t += 9) {
+    const ex = [pos[t + 3] - pos[t], pos[t + 4] - pos[t + 1], pos[t + 5] - pos[t + 2]];
+    const fx = [pos[t + 6] - pos[t], pos[t + 7] - pos[t + 1], pos[t + 8] - pos[t + 2]];
+    const cx = ex[1] * fx[2] - ex[2] * fx[1];
+    const cy = ex[2] * fx[0] - ex[0] * fx[2];
+    const cz = ex[0] * fx[1] - ex[1] * fx[0];
+    const area = Math.hypot(cx, cy, cz) / 2;
+    // About one point per square centimetre, with a floor so small parts show.
+    const n = Math.max(3, Math.min(90, Math.round(area * 16000)));
+    for (let i = 0; i < n; i++) {
+      let a = rnd();
+      let b = rnd();
+      if (a + b > 1) {
+        a = 1 - a;
+        b = 1 - b;
+      }
+      P.push(pos[t] + ex[0] * a + fx[0] * b, pos[t + 1] + ex[1] * a + fx[1] * b, pos[t + 2] + ex[2] * a + fx[2] * b);
+      N.push(normals[t], normals[t + 1], normals[t + 2]);
+      C.push(col[t], col[t + 1], col[t + 2]);
+      D.push(rnd(), rnd(), rnd());
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(P, 3));
+  g.setAttribute('normal', new Float32BufferAttribute(N, 3));
+  g.setAttribute('color', new Float32BufferAttribute(C, 3));
+  g.setAttribute('aDrift', new Float32BufferAttribute(D, 3));
+  return g;
+}
 
 /** One unit eye: a flattened ink dot with its white glint, in one draw call. */
 function eyeGeometry(): BufferGeometry {
@@ -122,6 +168,8 @@ class Model {
     private holo: ShaderMaterial,
     private core: ShaderMaterial,
     private cores: Mesh[],
+    private cloud: ShaderMaterial,
+    private clouds: Points[],
   ) {}
 
   private push(t: Tri, color: Color, shade: number) {
@@ -153,12 +201,23 @@ class Model {
     g.setAttribute('color', new Float32BufferAttribute(this.col, 3));
     g.computeVertexNormals();
     const out = new Group();
-    const mesh = new Mesh(g, this.holo);
+    const body = new InstancedBufferGeometry();
+    body.setAttribute('position', g.attributes.position);
+    body.setAttribute('normal', g.attributes.normal);
+    body.setAttribute('color', g.attributes.color);
+    body.setAttribute('aLayer', new InstancedBufferAttribute(new Float32Array([-1, -0.5, 0, 0.5, 1]), 1));
+    body.instanceCount = 5;
+    const mesh = new Mesh(body, this.holo);
     mesh.name = 'Paper';
     const edges = new LineSegments(new EdgesGeometry(g, 14), this.lines);
     edges.name = 'Creases';
     this.edgeList.push(edges);
-    const core = new Mesh(g, this.core);
+    const cloud = new Points(cloudGeometry(this.pos, g.attributes.normal.array as Float32Array, this.col), this.cloud);
+    cloud.name = 'Cloud';
+    cloud.raycast = () => {};
+    this.clouds.push(cloud);
+    out.add(cloud);
+    const core = new Mesh(body, this.core);
     core.name = 'Core';
     core.visible = false;
     core.raycast = () => {};
@@ -177,6 +236,8 @@ class Kit {
   readonly holo = holoBody();
   readonly core = holoCore();
   readonly cores: Mesh[] = [];
+  readonly cloud = holoCloud();
+  readonly clouds: Points[] = [];
   readonly eyes: Object3D[] = [];
   readonly folds: Fold[] = [];
   readonly edges: LineSegments[] = [];
@@ -187,7 +248,7 @@ class Kit {
   ) {}
 
   model(): Model {
-    return new Model(this.lines, this.edges, this.holo, this.core, this.cores);
+    return new Model(this.lines, this.edges, this.holo, this.core, this.cores, this.cloud, this.clouds);
   }
 
   /** An ink-dot eye sitting on face `f` of a solid centred at `c`. */
@@ -658,6 +719,8 @@ export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
     holo: k.holo,
     core: k.core,
     cores: k.cores,
+    cloud: k.cloud,
+    clouds: k.clouds,
     edges: k.edges,
   };
 }

@@ -110,8 +110,8 @@ const smooth = (x: number) => {
 const WAKE = 0.9;
 /** Seconds a new creature is held on the projection table, and how large. */
 const PRESENT = 3.6;
-const PRESENT_SCALE = 1.45;
-const PRESENT_HEIGHT = 0.13;
+const PRESENT_SCALE = 1.8;
+const PRESENT_HEIGHT = 0.15;
 
 /** Where a travelling creature is at progress u (room frame). */
 function travelPoint(tr: Travel, u: number, out: Vector3): Vector3 {

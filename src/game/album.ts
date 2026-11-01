@@ -40,6 +40,9 @@ export class Album {
   private badges: BadgeEntry[] = [];
   private spin = 0;
 
+  /** Asked to put a creature on the projection table. */
+  onInspect: ((kind: CreatureKind, look: number, times: number) => void) | null = null;
+
   constructor(world: World) {
     this.win = new GlassWindow(world, { name: 'Album', w: W, h: H, px: PX, r: 0.03, autoClose: AUTO_CLOSE });
     this.win.content.add(this.minis);
@@ -207,6 +210,12 @@ export class Album {
     entries.forEach((e, i) => {
       const r = this.cell(i);
       const have = e.looks.length > 0;
+      if (have) {
+        this.win.addHit(r.x, r.y, r.w, r.h, 8, () => {
+          sfx.click();
+          this.onInspect?.(e.kind, e.looks[e.looks.length - 1], e.looks.length);
+        }, `Album_${e.kind}`);
+      }
       g.fillStyle = INK.section;
       g.beginPath();
       g.roundRect(r.x, r.y, r.w, r.h, 8);

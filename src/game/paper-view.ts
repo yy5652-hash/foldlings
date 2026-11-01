@@ -18,11 +18,12 @@ import {
 } from '@iwsdk/core';
 import { applyAffine, clipConvex, Line, polygonArea, reflectPoint, V2 } from '../fold/geom.js';
 import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
-import { holoSheet } from './holo.js';
+import { holoSheet, holoWall } from './holo.js';
 import type { PaperTextures } from './paper-texture.js';
 
 export const LAYER_GAP = 0.0006;
 export const BASE_HEIGHT = 0.0012;
+const WALL_HEIGHT = 0.022;
 
 /** Two convex polygons overlap with positive area. */
 function overlaps(a: V2[], b: V2[]): boolean {
@@ -119,6 +120,7 @@ export class PaperView {
     depthWrite: false,
     side: DoubleSide,
   });
+  private wallMat = holoWall();
   private flapSign: 1 | -1 = 1;
   private axis = new Vector3();
   private q = new Quaternion();
@@ -210,6 +212,30 @@ export class PaperView {
       edge.renderOrder = 1 + heights[i];
       group.add(edge);
     });
+    const wall = new Mesh(this.wallGeometry(facets, heights, lift), this.wallMat);
+    wall.renderOrder = 30;
+    group.add(wall);
+  }
+
+  /** Every facet's edges drawn upward as a curtain of light, in one mesh. */
+  private wallGeometry(facets: readonly Facet[], heights: number[], lift: number): BufferGeometry {
+    const P: number[] = [];
+    const H: number[] = [];
+    facets.forEach((f, i) => {
+      const y = BASE_HEIGHT + heights[i] * LAYER_GAP + lift;
+      const n = f.poly.length;
+      for (let k = 0; k < n; k++) {
+        const a = f.poly[k];
+        const b = f.poly[(k + 1) % n];
+        const top = y + WALL_HEIGHT;
+        P.push(a.x, y, -a.y, b.x, y, -b.y, b.x, top, -b.y, a.x, y, -a.y, b.x, top, -b.y, a.x, top, -a.y);
+        H.push(0, 0, 1, 0, 1, 1);
+      }
+    });
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(P, 3));
+    g.setAttribute('aH', new Float32BufferAttribute(H, 1));
+    return g;
   }
 
   private clearGroup(g: Group) {

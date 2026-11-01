@@ -9,10 +9,13 @@
  */
 
 import {
+  BufferGeometry,
   CanvasTexture,
   CircleGeometry,
   Entity,
+  Float32BufferAttribute,
   Group,
+  LineSegments,
   Mesh,
   MeshBasicMaterial,
   NoColorSpace,
@@ -26,7 +29,7 @@ import {
   Vector3,
   World,
 } from '@iwsdk/core';
-import { HOLO_TIME } from './holo.js';
+import { HOLO_TIME, holoLine } from './holo.js';
 import { ICON_PATHS, IconKind } from './icon-paths.js';
 
 export type { IconKind };
@@ -483,6 +486,9 @@ interface HitArea {
   r: number;
 }
 
+/** How far the back plate of a window stands behind the front. */
+const SLAB = 0.018;
+
 export interface WindowOptions {
   name: string;
   w: number;
@@ -532,6 +538,7 @@ export class GlassWindow {
   private fwd = new Vector3();
 
   private hits: HitArea[] = [];
+  private slab: LineSegments<BufferGeometry> | null = null;
   private glide: Surface;
   private glideOn = 0;
   private glideX = 0;
@@ -580,6 +587,27 @@ export class GlassWindow {
     });
     this.surface.mesh.name = `${opts.name}_Glass`;
     this.content.add(this.surface.mesh);
+    if (glass) {
+      // A second plate behind the first and hairlines between them: a slab, not a sheet.
+      const back = new Surface({ w: opts.w, h: opts.h, r: 0.004, cut: 0.018, tint: [0.01, 0.1, 0.16], body: 0.3, rim: 0.7, order: LAYER.window - 1 });
+      back.mesh.position.z = -SLAB;
+      this.content.add(back.mesh);
+      const hx = opts.w / 2;
+      const hy = opts.h / 2;
+      const c = 0.018;
+      const corners: [number, number][] = [
+        [hx - c, hy], [hx, hy - c], [hx, -hy + c], [hx - c, -hy],
+        [-hx + c, -hy], [-hx, -hy + c], [-hx, hy - c], [-hx + c, hy],
+      ];
+      const L: number[] = [];
+      for (const [x, y] of corners) L.push(x, y, 0, x, y, -SLAB);
+      const g = new BufferGeometry();
+      g.setAttribute('position', new Float32BufferAttribute(L, 3));
+      this.slab = new LineSegments(g, holoLine(0x8fe6ff, 0.8));
+      this.slab.renderOrder = LAYER.window;
+      this.slab.raycast = () => {};
+      this.content.add(this.slab);
+    }
 
     this.glide = new Surface({ w: 0.1, h: 0.1, r: 0.01, tint: [1, 1, 1], body: 0, order: LAYER.section });
     this.glide.mesh.visible = false;
@@ -725,6 +753,7 @@ export class GlassWindow {
       this.content.scale.setScalar(s);
       this.content.position.z = -0.012 * (1 - this.reveal);
       fadeTree(this.content, this.reveal * this.reveal);
+      if (this.slab) (this.slab.material as MeshBasicMaterial).opacity = 0.8 * this.reveal;
     }
     if (this.want) {
       this.idle += dt;

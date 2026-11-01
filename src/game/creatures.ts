@@ -6,6 +6,7 @@
 
 import { Color, Euler, Group, LineSegments, Mesh, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
 import { buildRig, type Rig } from './creature-models.js';
+import { HoloVolume } from './holo-volume.js';
 import type { CreatureKind } from './levels.js';
 import type { PaperLook } from './paper-texture.js';
 import { sfx } from './sfx.js';
@@ -62,10 +63,10 @@ export class Creature {
   private e = new Euler(0, 0, 0, 'YXZ');
   private v = new Vector3();
 
-  constructor(kind: CreatureKind, look: PaperLook) {
+  constructor(kind: CreatureKind, private paperLook: PaperLook) {
     this.kind = kind;
     this.root.name = `Creature_${kind}`;
-    this.rig = buildRig(kind, look.front, look.back);
+    this.rig = buildRig(kind, paperLook.front, paperLook.back);
     this.bob.add(this.rig.body);
     this.root.add(this.bob);
     this.rest = this.rig.folds.map((f) => f.obj.quaternion.clone());
@@ -149,6 +150,7 @@ export class Creature {
     if (near !== this.detailed) {
       this.detailed = near;
       for (const e of this.rig.edges) e.visible = near;
+      for (const e of this.rig.clouds) e.visible = near;
     }
     this.flash = Math.max(0, this.flash - dt * 2.4);
     const lines = this.rig.lines;
@@ -281,22 +283,34 @@ export class Creature {
   /** Shows the inner layer while the creature is on the projection table. */
   setPresenting(on: boolean) {
     for (const c of this.rig.cores) c.visible = on;
+    if (on && !this.volume) {
+      this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
+      this.bob.add(this.volume.mesh);
+    }
+    if (!on && this.volume) {
+      this.bob.remove(this.volume.mesh);
+      this.volume.dispose();
+      this.volume = null;
+    }
     if (!on) {
       this.setExplode(0);
       this.setScan(-99);
     }
   }
+  private volume: HoloVolume | null = null;
 
   /** Metres the facets stand apart, for the exploded view. */
   setExplode(k: number) {
     this.rig.holo.uniforms.uExplode.value = k;
     this.rig.core.uniforms.uExplode.value = -0.006 + k * 0.55;
+    this.rig.cloud.uniforms.uExplode.value = k;
   }
 
   /** World height of the slice passing through the body. */
   setScan(y: number) {
     this.rig.holo.uniforms.uScanY.value = y;
     this.rig.core.uniforms.uScanY.value = y;
+    this.volume?.setScan(y);
   }
 
   /** World height the body has formed up to; anything high means all of it. */
@@ -321,8 +335,10 @@ export class Creature {
   }
 
   dispose() {
+    this.setPresenting(false);
     this.rig.holo.dispose();
     this.rig.core.dispose();
+    this.rig.cloud.dispose();
     this.root.traverse((o) => {
       if ((o as Mesh).isMesh && o.name === 'Paper') (o as Mesh).geometry.dispose();
       if ((o as LineSegments).isLineSegments) (o as LineSegments).geometry.dispose();
