@@ -16,6 +16,8 @@ import {
   VisibilityState,
   XRMesh,
   XRPlane,
+  PokeInteractable,
+  RayInteractable,
 } from '@iwsdk/core';
 import { FoldSpec, paperBounds } from '../fold/paper.js';
 import { FoldGame } from './fold-game.js';
@@ -24,6 +26,7 @@ import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, st
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
+import { Button } from './button.js';
 import { Creature, HABITAT } from './creatures.js';
 import { HoloStage } from './holo-stage.js';
 import { RoomModel } from './room-model.js';
@@ -151,7 +154,8 @@ export class GameSystem extends createSystem({
   private dimmer = new Dimmer();
   private stage!: HoloStage;
   private roomModel = new RoomModel();
-  private demo: { c: Creature; t: number } | null = null;
+  private demo: { c: Creature; t: number; idle: number; yaw: number; pull: number; grabbed: boolean; grabX: number; grabZ: number } | null = null;
+  private inspectClose!: Button;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
@@ -289,6 +293,13 @@ export class GameSystem extends createSystem({
     this.game.boardRoot.add(this.stage.root);
     this.world.scene.add(this.stage.labels);
     this.game.boardRoot.add(this.roomModel.root);
+    this.inspectClose = new Button('close', () => this.endInspect(), 'Close', { r: 0.02 });
+    this.inspectClose.root.name = 'Inspect_close';
+    this.inspectClose.root.position.y = -50;
+    this.inspectClose.root.rotation.x = 0.55;
+    const closeEntity = this.world.createTransformEntity(this.inspectClose.root, this.game.boardEntity);
+    closeEntity.addComponent(RayInteractable);
+    closeEntity.addComponent(PokeInteractable);
     this.roomModel.root.position.set(0, 0.25, -0.03);
     if (this.progress.muted) {
       setMuted(true);
@@ -494,13 +505,15 @@ export class GameSystem extends createSystem({
     this.endInspect();
     this.album.hide();
     const c = new Creature(kind, LOOKS[look % LOOKS.length]);
-    c.root.scale.setScalar(1.8);
+    c.root.scale.setScalar(c.tableScale);
     c.root.position.set(0, 0.17, -0.02);
     this.game.boardRoot.add(c.root);
     this.game.hidePaper(true);
     this.game.setStage(false);
     c.setPresenting(true);
-    this.demo = { c, t: 0 };
+    this.demo = { c, t: 0, idle: 0, yaw: 0, pull: 0, grabbed: false, grabX: 0, grabZ: 0 };
+    this.game.inputLocked = true;
+    this.inspectClose.root.position.set(0, 0.06, 0.2);
     this.stage.present(0.05, 0.42);
     const [head, a, b] = c.anchors;
     this.stage.setCallout(0, head, [0, 0, 0], 0.2, 0.07, kind.toUpperCase(), times > 0 ? `FOLDED ${times} ${times === 1 ? 'TIME' : 'TIMES'}` : 'IN YOUR ZOO');
@@ -515,6 +528,8 @@ export class GameSystem extends createSystem({
     this.demo.c.root.removeFromParent();
     this.demo.c.dispose();
     this.demo = null;
+    this.inspectClose.root.position.y = -50;
+    this.game.inputLocked = false;
     this.stage.dismiss();
     this.game.hidePaper(false);
     this.game.setStage(true);
@@ -523,14 +538,38 @@ export class GameSystem extends createSystem({
   private updateDemo(dt: number) {
     const d = this.demo;
     if (!d) return;
-    d.t += dt;
     d.c.update(dt);
-    d.c.root.rotation.y = d.t * 0.42;
-    // Pulled apart and closed again, slowly, to show how it is made.
-    const e = 0.5 - 0.5 * Math.cos(d.t * 0.7);
-    d.c.setExplode(0.013 * e * e);
+    const { left, right } = this.handBodies.pinch;
+    const both = left.on && right.on;
+    const one = !both && (left.on || right.on) ? (left.on ? left : right) : null;
+    if (both || one) d.idle = 0;
+    else d.idle += dt;
+    // Two hands pull it apart; one hand turns it; left alone it turns by itself.
+    if (both) {
+      d.pull = Math.max(0, Math.min(1, (left.at.distanceTo(right.at) - 0.14) / 0.38));
+    } else {
+      d.pull = Math.max(0, d.pull - dt * 0.8);
+    }
+    if (one) {
+      this.world.camera.getWorldDirection(this.ear);
+      if (d.grabbed) {
+        // Dragging across the view turns the body the same way.
+        const dx = (one.at.x - d.grabX) * -this.ear.z + (one.at.z - d.grabZ) * this.ear.x;
+        d.yaw += dx * 8;
+      }
+      d.grabbed = true;
+      d.grabX = one.at.x;
+      d.grabZ = one.at.z;
+    } else {
+      d.grabbed = false;
+      d.yaw += dt * 0.42;
+    }
+    d.c.root.rotation.y = d.yaw;
+    d.t += dt;
+    const breathe = 0.5 - 0.5 * Math.cos(d.t * 0.7);
+    d.c.setExplode(Math.max(0.013 * breathe * breathe, 0.05 * d.pull));
     d.c.setScan(this.stage.scanY);
-    if (d.t > INSPECT_SECONDS) this.endInspect();
+    if (d.idle > INSPECT_SECONDS) this.endInspect();
   }
 
   /** Gives up the costliest extras if a headset cannot hold its frame rate. */
@@ -1011,6 +1050,7 @@ export class GameSystem extends createSystem({
       if (this.modelIn <= 0) this.showRoomModel();
     }
     this.updateDemo(delta);
+    this.inspectClose.update(delta);
     this.updatePresentation(delta);
     if (this.roomModelOn && !this.roomModel.showing) {
       this.roomModelOn = false;

@@ -26,7 +26,7 @@ import {
   Vector3,
   World,
 } from '@iwsdk/core';
-import { holoLine } from './holo.js';
+import { HOLO_FINGERS, holoLine } from './holo.js';
 
 const FINGERS = ['index-finger', 'middle-finger', 'ring-finger', 'pinky-finger'];
 const JOINTS: XRHandJoint[] = [
@@ -67,6 +67,8 @@ FINGERS.forEach((f, i) => {
   }
 });
 
+const INDEX_TIP = at('index-finger-tip');
+const THUMB_TIP = at('thumb-tip');
 const MAX = LINKS.length * 2;
 const Y = new Vector3(0, 1, 0);
 const FALLBACK_RADIUS = 0.008;
@@ -125,6 +127,11 @@ export class HandBodies {
   private frosted = frostedGlass();
   private sdkFill: Mesh[] = [];
   private sdkOutline: Mesh[] = [];
+  /** Where each hand pinches, and whether it is pinching now. */
+  readonly pinch = {
+    left: { on: false, at: new Vector3() },
+    right: { on: false, at: new Vector3() },
+  };
   private cursors: Mesh[] = [];
   private rays: Mesh[] = [];
   private clock = 0;
@@ -234,6 +241,9 @@ export class HandBodies {
     let n = 0;
     let jn = 0;
     let bn = 0;
+    HOLO_FINGERS.value[0].y = -99;
+    HOLO_FINGERS.value[1].y = -99;
+    this.pinch.left.on = this.pinch.right.on = false;
     for (const src of frame.session.inputSources) {
       if (!src.hand) continue;
       let ok = true;
@@ -249,6 +259,13 @@ export class HandBodies {
         this.rad[i] = pose.radius ?? FALLBACK_RADIUS;
       }
       if (!ok) continue;
+      const left = src.handedness === 'left';
+      const tip = this.pos[INDEX_TIP];
+      const thumb = this.pos[THUMB_TIP];
+      HOLO_FINGERS.value[left ? 0 : 1].copy(tip);
+      const hold = left ? this.pinch.left : this.pinch.right;
+      hold.on = tip.distanceTo(thumb) < 0.024;
+      hold.at.addVectors(tip, thumb).multiplyScalar(0.5);
       for (let i = 0; i < JOINTS.length; i++) {
         this.m.makeTranslation(this.pos[i].x, this.pos[i].y, this.pos[i].z);
         if (jn < JOINTS.length * 2) this.joints.setMatrixAt(jn++, this.m);

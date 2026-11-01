@@ -141,7 +141,7 @@ export default async function ({ page, frame, cdp, signal }) {
   const results = [];
   // {"fold": {...}} pinches and folds the next solution step with one hand.
   const fold = async (opt) => {
-    const pts = await frame.evaluate(() => window.__foldlings.game.nextFoldPoints());
+    const pts = opt.grab ? { grab: { x: opt.grab[0], y: opt.grab[1] }, dest: { x: opt.dest[0], y: opt.dest[1] } } : await frame.evaluate(() => window.__foldlings.game.nextFoldPoints());
     if (!pts) return null;
     const { grab, dest } = pts;
     const mid = { x: (grab.x + dest.x) / 2, y: (grab.y + dest.y) / 2 };
@@ -294,7 +294,10 @@ export default async function ({ page, frame, cdp, signal }) {
     if (s.follow) await follow(s.follow);
     if (s.eval) results.push(await frame.evaluate((src) => new Function(`return (${src});`)(), s.eval));
     if (s.remote) {
-      const r = await remote(s.remote, s.params ?? {});
+      // "nowait": both hands can move at once.
+      const moving = remote(s.remote, s.params ?? {});
+      if (s.nowait) moving.catch(() => {});
+      const r = s.nowait ? null : await moving;
       results.push(s.remote === 'run_sequence' ? { ok: !!r, warnings: r?.warnings } : null);
     }
     if (s.wait) await new Promise((r) => setTimeout(r, s.wait * 1000));

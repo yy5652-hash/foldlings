@@ -481,7 +481,7 @@ export class FoldGame {
       }
       this.board.showHintLine(creaseLine(next));
       if (this.hintStep === 2) {
-        this.guide.setCaption('Fold along the gold line');
+        this.guide.setCaption('Fold along the laser line');
         this.hintTimer = 4;
         return;
       }

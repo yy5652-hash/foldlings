@@ -172,7 +172,8 @@ export class RoomScan {
       mesh.frustumCulled = false;
       this.root.add(mesh);
       let label: Sprite | null = null;
-      if (labelled.has(s) || (s.kind === 'floor' && surfaces.length < 4)) {
+      // Unnamed things get no label: a tag reading OTHER tells nobody anything.
+      if ((labelled.has(s) || (s.kind === 'floor' && surfaces.length < 4)) && s.label !== 'other') {
         label = new Sprite(
           new SpriteMaterial({ map: labelTexture(niceLabel(s)), transparent: true, depthWrite: false, depthTest: false }),
         );

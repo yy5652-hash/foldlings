@@ -16,10 +16,14 @@ import {
   LineBasicMaterial,
   ShaderMaterial,
   Texture,
+  Vector3,
 } from '@iwsdk/core';
 
 /** Shared clock for every hologram, so scan lines stay in step. */
 export const HOLO_TIME = { value: 0 };
+
+/** Fingertips in the world; a hologram lights up where a hand comes near it. */
+export const HOLO_FINGERS = { value: [new Vector3(0, -99, 0), new Vector3(0, -99, 0)] };
 
 export function tickHolo(dt: number) {
   HOLO_TIME.value = (HOLO_TIME.value + dt) % 3600;
@@ -33,6 +37,7 @@ varying vec3 vW;
 varying vec3 vN;
 varying vec3 vC;
 varying float vLayer;
+varying float vNear;
 void main() {
   // Every facet moves out along its own normal: an exploded view of the model.
   float r = fract(sin(dot(normal, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
@@ -43,6 +48,10 @@ void main() {
   vW = w.xyz;
   vN = normalize(mat3(modelMatrix) * normal);
   vC = pow(color, vec3(0.4545));
+  // How near the viewer this point is, within the body: drives depth grading.
+  float z0 = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).z;
+  float z = (viewMatrix * w).z;
+  vNear = clamp(0.5 + (z - z0) / 0.34, 0.0, 1.0);
   gl_Position = projectionMatrix * viewMatrix * w;
 }`;
 
@@ -54,10 +63,12 @@ uniform float uGlow;
 uniform float uDensity;
 uniform vec3 uTint;
 uniform float uTintK;
+uniform vec3 uFingers[2];
 varying vec3 vW;
 varying vec3 vN;
 varying vec3 vC;
 varying float vLayer;
+varying float vNear;
 void main() {
   if (vW.y > uReveal) discard;
   vec3 N = normalize(vN);
@@ -69,14 +80,20 @@ void main() {
   // A slow band of light climbing the body.
   float climb = pow(fract(vW.y * 3.0 - uTime * 0.22), 28.0);
   // Where the slice plane cuts through, and the edge of a body still forming.
-  float cut = exp(-pow((vW.y - uScanY) * 60.0, 2.0));
+  float cut = exp(-pow((vW.y - uScanY) * 200.0, 2.0));
   float forming = uReveal < 90.0 ? exp(-pow((vW.y - uReveal) * 90.0, 2.0)) : 0.0;
   float flicker = 0.965 + 0.035 * sin(uTime * 41.0 + vW.y * 50.0);
   float body = 0.09 + 0.8 * rim + 0.24 * line + 0.5 * climb;
   // Middle layers burn brightest, the outermost fade like a soft edge.
   body *= 1.0 - 0.72 * abs(vLayer);
   vec3 col = mix(vC, uTint, uTintK) * body * flicker * uGlow;
-  col += vec3(0.78, 0.96, 1.0) * (rim * rim * 0.45 + cut * 1.15 + forming * 1.7);
+  // Far parts fade and go blue, as depth does through any haze of light.
+  col = mix(col * vec3(0.32, 0.5, 0.82), col, vNear);
+  col += vec3(0.78, 0.96, 1.0) * (rim * rim * 0.45 * uGlow + cut * 0.3 + forming * 1.7);
+  // A hand coming near lights the body around it.
+  vec3 f0 = uFingers[0] - vW;
+  vec3 f1 = uFingers[1] - vW;
+  col += vec3(0.45, 0.85, 1.0) * (exp(-dot(f0, f0) / 0.009) + exp(-dot(f1, f1) / 0.009)) * 0.75;
   gl_FragColor = vec4(col, min(0.4, 0.12 + 0.3 * rim));
 }`;
 
@@ -101,6 +118,7 @@ export function holoBody(): ShaderMaterial {
       uDensity: { value: 165 },
       uTint: { value: new Color(1, 0.62, 0.28) },
       uTintK: { value: 0 },
+      uFingers: HOLO_FINGERS,
     },
   });
 }

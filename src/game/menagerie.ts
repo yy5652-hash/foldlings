@@ -95,6 +95,7 @@ interface Travel {
   /** Seconds held on the projection table, and where. */
   present: number;
   presentAt: Vector3;
+  tableScale: number;
   marked: boolean;
   woke: boolean;
   normal: Vector3 | null;
@@ -110,7 +111,6 @@ const smooth = (x: number) => {
 const WAKE = 0.9;
 /** Seconds a new creature is held on the projection table, and how large. */
 const PRESENT = 3.6;
-const PRESENT_SCALE = 1.8;
 const PRESENT_HEIGHT = 0.15;
 
 /** Where a travelling creature is at progress u (room frame). */
@@ -575,6 +575,7 @@ export class Menagerie {
       prelude,
       present,
       presentAt,
+      tableScale: c.tableScale,
       marked: false,
       woke: false,
       normal: rest.n ? new Vector3().fromArray(rest.n) : null,
@@ -642,7 +643,7 @@ export class Menagerie {
       const left = -tr.t;
       // On the table: drawn up large at the centre, turning once, then let go.
       const held = tr.present > 0 ? smooth((since - LIFT) / 0.9) * smooth(left / 0.8) : 0;
-      root.scale.setScalar((0.35 + 0.65 * e) * (1 + (PRESENT_SCALE - 1) * held));
+      root.scale.setScalar((0.35 + 0.65 * e) * (1 + (tr.tableScale - 1) * held));
       root.position.lerpVectors(tr.start, tr.from, e);
       root.position.lerp(tr.presentAt, held);
       root.position.y += Math.sin(since * 3.2) * 0.006 * e;
@@ -867,6 +868,7 @@ export class Menagerie {
       prelude: 0,
       present: 0,
       presentAt: from,
+      tableScale: 1,
       marked: true,
       woke: true,
       normal: null,

@@ -4,7 +4,7 @@
  * their own voice, and can fold themselves up out of a flat sheet.
  */
 
-import { Color, Euler, Group, LineSegments, Mesh, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
+import { Box3, Color, Euler, Group, LineSegments, Mesh, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
 import { buildRig, type Rig } from './creature-models.js';
 import { HoloVolume } from './holo-volume.js';
 import type { CreatureKind } from './levels.js';
@@ -154,7 +154,7 @@ export class Creature {
     }
     this.flash = Math.max(0, this.flash - dt * 2.4);
     const lines = this.rig.lines;
-    lines.opacity = 0.6 + this.flash * 0.4;
+    lines.opacity = (this.presenting ? 0.95 : 0.6) + this.flash * 0.4;
     lines.color.lerpColors(INK, GOLD, this.flash);
     if (this.foldT >= 0) {
       this.foldT += dt;
@@ -282,13 +282,20 @@ export class Creature {
 
   /** Shows the inner layer while the creature is on the projection table. */
   setPresenting(on: boolean) {
+    this.presenting = on;
     for (const c of this.rig.cores) c.visible = on;
     if (on && !this.volume) {
       this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
-      this.bob.add(this.volume.mesh);
+      this.bob.add(this.volume.mesh, this.volume.sand);
     }
+    // Layers a centimetre or more apart are what the two eyes read as depth.
+    this.rig.holo.uniforms.uThick.value = on ? 0.0105 : 0.0058;
+    this.rig.core.uniforms.uThick.value = on ? 0.008 : 0.0058;
+    // Thick layers overlap, so each one burns lower to keep the form readable.
+    this.rig.holo.uniforms.uGlow.value = on ? 0.6 : 1;
+    this.rig.core.uniforms.uGlow.value = on ? 0.52 : 0.8;
     if (!on && this.volume) {
-      this.bob.remove(this.volume.mesh);
+      this.bob.remove(this.volume.mesh, this.volume.sand);
       this.volume.dispose();
       this.volume = null;
     }
@@ -298,6 +305,7 @@ export class Creature {
     }
   }
   private volume: HoloVolume | null = null;
+  private presenting = false;
 
   /** Metres the facets stand apart, for the exploded view. */
   setExplode(k: number) {
@@ -317,6 +325,13 @@ export class Creature {
   setForming(y: number) {
     this.rig.holo.uniforms.uReveal.value = y;
     this.rig.core.uniforms.uReveal.value = y;
+  }
+
+  /** The scale at which this kind stands about half a metre across on the table. */
+  get tableScale(): number {
+    const size = new Box3().setFromObject(this.rig.body).getSize(this.v);
+    const span = Math.max(size.x, size.y, size.z) / Math.max(this.root.scale.x, 1e-4);
+    return Math.max(0.9, Math.min(2.6, 0.5 / Math.max(span, 0.05)));
   }
 
   /** How many flat faces the model is made of. */
