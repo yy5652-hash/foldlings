@@ -8,7 +8,8 @@ import { FoldUp } from './fold-up.js';
 import { area, validate, type Part, type Point } from './pattern.js';
 import { dot, measure, normal, subtract, type Position } from './relax.js';
 
-const definition = frog(), c = definition.construction, data = bake(definition);
+// Shape checks read the pose as designed; the bake itself lies where its weight puts it.
+const definition = frog(), c = definition.construction, data = bake(definition, { rest: false });
 const ids = (part: Part) => [...new Set(data.faces.flatMap(f => f.part === part ? f.vertices : []))];
 const points = (part: Part) => ids(part).map(v => data.positions[v]);
 const corner = (p: Point) => data.positions[c.graph.vertices.findIndex(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < 1e-9)];
@@ -89,8 +90,9 @@ describe('rectangle-base jumping frog', () => {
   });
 
   it('reproduces the bake and preserves paper after runtime quantization', () => {
-    expect(runtimeData(data)).toEqual(baked.frog);
-    expect(bake(frog())).toEqual(data);
+    const settled = bake(definition);
+    expect(runtimeData(settled)).toEqual(baked.frog);
+    expect(bake(frog())).toEqual(settled);
     for (const positions of [data.positions, baked.frog.positions]) {
       const report = measure(c.graph, positions);
       expect(report.worstStrain).toBeLessThanOrEqual(.01);

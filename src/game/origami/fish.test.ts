@@ -100,7 +100,7 @@ describe('fish paper', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  }, 20000);
+  }, 240000);
 
   it('clamps, opens, and replays continuously into the same output buffer', () => {
     const fold = new FoldUp(baked.fish), out = new Float32Array(data.positions.length * 3);

@@ -1,6 +1,7 @@
 import { flatFold } from './flat.js';
 import { area, validate, type Part } from './pattern.js';
 import { cross, dot, normal, measure, subtract, unit, type Position } from './relax.js';
+import { applyRest, settle } from './settle.js';
 import { triangulate } from './triangulate.js';
 import type { BakeResult } from './data.js';
 import type { Definition } from './definition.js';
@@ -44,7 +45,8 @@ function frame(face: number[], sheet: Position[], positions: Position[]) {
   return { rotation, translation };
 }
 
-export function bake(definition: Definition): BakeResult {
+/** `rest: false` keeps the pose as designed, for checking the shape of the fold itself. */
+export function bake(definition: Definition, { rest: settles = true } = {}): BakeResult {
   const c = definition.construction, g = c.graph;
   validate(g);
   const base = c.parts.indexOf('body');
@@ -53,9 +55,14 @@ export function bake(definition: Definition): BakeResult {
   for (const pose of [shaped.positions, shaped.flatPositions]) {
     if (pose.length !== g.vertices.length || pose.some(p => p.length !== 3 || p.some(n => !Number.isFinite(n)))) throw new Error('Invalid shape positions');
   }
-  const floor = definition.touchesGround ? Math.min(...shaped.positions.map(p => p[1])) : 0;
-  const positions: Position[] = shaped.positions.map(p => [p[0], p[1] - floor, p[2]]);
-  const flatPositions: Position[] = shaped.flatPositions.map(p => [p[0], p[1] - floor, p[2]]);
+  // A model on the table lies however its weight puts it, not how it was posed.
+  const triangles = g.faces.flatMap(f => triangulate(f, g.vertices));
+  const rest = settles && definition.touchesGround ? settle(shaped.positions, triangles) : null;
+  const rested = (p: Position) => (rest ? applyRest(rest, p) : p);
+  const lying = shaped.positions.map(rested);
+  const floor = definition.touchesGround ? Math.min(...lying.map(p => p[1])) : 0;
+  const positions: Position[] = lying.map(p => [p[0], p[1] - floor, p[2]]);
+  const flatPositions: Position[] = shaped.flatPositions.map(rested).map(p => [p[0], p[1] - floor, p[2]]);
   const report = measure(g, positions);
   if (report.worstStrain > .01 || report.rmsStrain > .002 || report.planarity > .0005) throw new Error(`Paper constraints failed: ${JSON.stringify(report)}`);
   const sheetPositions: Position[] = g.vertices.map(p => [p[0], 0, p[1]]);
@@ -96,7 +103,8 @@ export function bake(definition: Definition): BakeResult {
     stages: Math.max(...g.edges.map(e => e.stage)) + 1,
     report: { faceCount: g.faces.length, creaseCount: c.pattern.creases.length, layers: flat.layerCount,
       area: g.faces.reduce((s, f) => s + area(f.map(v => g.vertices[v])), 0),
-      wingspan: span(0), height: span(1), length: span(2), closure: flat.closure, ...report, silhouette: definition.metrics?.(positions) ?? {} },
+      wingspan: span(0), height: span(1), length: span(2), closure: flat.closure, ...report, restTilt: rest?.tilt ?? 0, restMargin: rest?.margin ?? 0,
+      silhouette: definition.metrics?.(shaped.positions) ?? {} },
   };
   return JSON.parse(JSON.stringify(baked));
 }

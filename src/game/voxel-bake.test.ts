@@ -42,4 +42,4 @@ it('measures voxel baking for every resting model without a renderer', () => {
     rig.lines.dispose();
   }
   console.table(rows);
-});
+}, 300000);

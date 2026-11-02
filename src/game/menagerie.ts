@@ -557,7 +557,7 @@ export class Menagerie {
     fromLocal.y += HOVER;
     const toLocal = new Vector3().fromArray(rest.p);
     c.root.position.copy(startLocal);
-    c.root.scale.setScalar(0.35 * c.restScale);
+    c.root.scale.setScalar(c.restScale);
     c.startFoldUp();
     sfx.pop();
     const present = this.reduceMotion ? 0 : PRESENT;
@@ -684,7 +684,8 @@ export class Menagerie {
       const left = -tr.t;
       // On the table: drawn up large at the centre, turning once, then let go.
       const held = tr.present > 0 ? smooth((since - LIFT) / 0.9) * smooth(left / 0.8) : 0;
-      root.scale.setScalar((0.35 + 0.65 * e) * (l.c.restScale + (tr.tableScale - l.c.restScale) * held));
+      // It is the same 20 cm sheet throughout; only the projection table magnifies it.
+      root.scale.setScalar(l.c.restScale + (tr.tableScale - l.c.restScale) * held);
       root.position.lerpVectors(tr.start, tr.from, e);
       root.position.lerp(tr.presentAt, held);
       root.position.y += Math.sin(since * 3.2) * 0.006 * e;
@@ -692,13 +693,6 @@ export class Menagerie {
       const yaw = Math.atan2(local.x - root.position.x, local.z - root.position.z) + Math.PI;
       const spin = tr.present > 0 ? smooth((since - LIFT) / (tr.prelude - LIFT)) * Math.PI * 2 : 0;
       root.rotation.set(0, yaw + Math.PI * (1 - e) + spin, 0);
-      // The body forms from the base up, its edge burning as it comes.
-      if (since < LIFT + 0.4) {
-        const at = root.getWorldPosition(this.tmp);
-        l.c.setForming(at.y - 0.04 + smooth(since / (LIFT + 0.3)) * 0.42);
-      } else {
-        l.c.setForming(99);
-      }
       if (!tr.woke && !l.c.folding && since > LIFT) {
         tr.woke = true;
         this.onAwake?.();

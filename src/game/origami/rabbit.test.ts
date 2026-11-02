@@ -8,7 +8,8 @@ import { area, validate, type Part, type Point } from './pattern.js';
 import { rabbit } from './rabbit.js';
 import { cross, dot, measure, normal, subtract, type Position } from './relax.js';
 
-const definition = rabbit(), c = definition.construction, data = bake(definition);
+// Shape checks read the pose as designed; the bake itself lies where its weight puts it.
+const definition = rabbit(), c = definition.construction, data = bake(definition, { rest: false });
 const ids = (part: Part) => [...new Set(data.faces.flatMap(f => data.rig[f.part] === part ? f.vertices : []))];
 const points = (part: Part) => ids(part).map(v => data.positions[v]);
 const span = (ps: Position[], k: number) => Math.max(...ps.map(p => p[k])) - Math.min(...ps.map(p => p[k]));
@@ -169,7 +170,7 @@ describe('rabbit paper', () => {
   });
 
   it('reproduces the bake and preserves every edge, diagonal and face plane after rounding', () => {
-    expect(runtimeData(data)).toEqual(baked.rabbit);
+    expect(runtimeData(bake(definition))).toEqual(baked.rabbit);
     for (const positions of [data.positions, baked.rabbit.positions, data.flatPositions]) {
       const report = measure(c.graph, positions);
       expect(report.worstStrain).toBeLessThanOrEqual(.01);

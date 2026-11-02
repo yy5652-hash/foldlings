@@ -1,11 +1,11 @@
 /**
- * Origami creature models: faceted paper solids and two-sided sheets, with
- * crease lines along every fold and ink-dot eyes. Pure geometry (no DOM, no
- * audio, no World), so the asset manifest and the game build identical rigs.
+ * Origami creature models, built from the crease patterns baked in
+ * ./origami: two-sided paper facets, crease lines along every fold and ink-dot
+ * eyes. Pure geometry (no DOM, no audio, no World), so the asset manifest and
+ * the game build identical rigs.
  *
- * Units are metres. Origin is the contact point, +Y is up, the creature faces
- * -Z. Animated parts hang from pivot groups; `folds` lists how each pivot
- * lies flat on the paper before the creature folds itself up.
+ * Units are metres. +Y is up and the creature faces -Z. Animated parts hang
+ * from pivot groups; `morph` folds the whole sheet up from flat.
  */
 
 import {
@@ -21,6 +21,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   Object3D,
+  Quaternion,
   Vector3,
   ShaderMaterial,
   InstancedBufferAttribute,
@@ -31,17 +32,39 @@ import { holoBody, holoCloud, holoCore, holoLine } from './holo.js';
 import type { CreatureKind } from './levels.js';
 import { baked } from './origami/baked.js';
 import { FoldUp } from './origami/fold-up.js';
+import { bestLine } from './origami/hinge.js';
+import type { RigPart } from './origami/definition.js';
 import type { BakedOrigami } from './origami/data.js';
+import type { Position } from './origami/relax.js';
 
 export type P = [number, number, number];
 type Tri = [P, P, P];
 
-/** A pivot that lies flat (rotated by `angle` about `axis`) until its beat. */
-export interface Fold {
-  obj: Object3D;
-  axis: Vector3;
-  angle: number;
-  beat: number;
+/** The widest a seam may open while a part moves, in metres of real paper. */
+export const MAX_SEAM = 0.001;
+const MAX_TURN = 1.4;
+
+/** A part of the sheet that moves the way paper can: by turning about its crease. */
+export class Flex {
+  /** Radians it can turn before the seam opens further than MAX_SEAM. */
+  readonly limit: number;
+  private q = new Quaternion();
+
+  constructor(
+    private groups: Object3D[],
+    private axis: Vector3,
+    residual: number,
+  ) {
+    this.limit = residual > 1e-6 ? Math.min(MAX_TURN, MAX_SEAM / residual) : MAX_TURN;
+  }
+
+  /** Turns by `angle` about the crease, its direction taken from the nearby axis (x, y, z). */
+  turn(angle: number, x: number, y: number, z: number) {
+    const a = this.axis;
+    const signed = a.x * x + a.y * y + a.z * z < 0 ? -angle : angle;
+    this.q.setFromAxisAngle(a, Math.max(-this.limit, Math.min(this.limit, signed)));
+    for (let i = 0; i < this.groups.length; i++) this.groups[i].quaternion.copy(this.q);
+  }
 }
 
 export interface Rig {
@@ -49,7 +72,6 @@ export interface Rig {
   root: Group;
   /** Everything visible; idle squash and the fold-up flatten act on it. */
   body: Group;
-  /** Turns towards the player when present; otherwise the body turns. */
   head: Object3D | null;
   eyes: Object3D[];
   wingL?: Object3D;
@@ -59,9 +81,10 @@ export interface Rig {
   legR?: Object3D;
   earL?: Object3D;
   earR?: Object3D;
-  folds: Fold[];
-  morph?: { stages: number; apply(t: number): void };
-  facetCount?: number;
+  /** The parts that can move, each only about the crease it hangs from. */
+  flex: Partial<Record<RigPart, Flex>>;
+  morph: { stages: number; apply(t: number): void };
+  facetCount: number;
   /** Crease lines; brightened while the creature folds itself up. */
   lines: LineBasicMaterial;
   /** The projected body: exploded view, slice and forming edge live on this. */
@@ -156,13 +179,9 @@ const mix = (pts: P[], w: number[]): P => {
   });
   return o;
 };
-const mirror = (p: P): P => [-p[0], p[1], p[2]];
 const mean = (pts: P[]): P => mix(pts, pts.map(() => 1 / pts.length));
 
-/**
- * Collects coloured triangles. Solids orient every face away from their
- * centre; sheets (wings, fins, ears) are drawn on both sides.
- */
+/** Collects coloured triangles; paper is drawn on both sides. */
 class Model {
   private pos: number[] = [];
   private col: number[] = [];
@@ -184,15 +203,6 @@ class Model {
     for (const p of t) {
       this.pos.push(p[0], p[1], p[2]);
       this.col.push(color.r * s, color.g * s, color.b * s);
-    }
-  }
-
-  solid(faces: Tri[], color: Color, shade = 1, center?: P) {
-    const c = center ?? mean(faces.flat());
-    for (const f of faces) {
-      const nrm = new Vector3().crossVectors(sub(f[1], f[0]), sub(f[2], f[0]));
-      const out = sub(mean(f), c);
-      this.push(nrm.dot(out) >= 0 ? f : [f[0], f[2], f[1]], color, shade);
     }
   }
 
@@ -233,9 +243,6 @@ class Model {
   }
 }
 
-const cone = (ring: P[], apex: P): Tri[] => ring.map((p, k) => [p, ring[(k + 1) % ring.length], apex]);
-const tetra = (a: P, b: P, c: P, apex: P): Tri[] => [[a, b, c], ...cone([a, b, c], apex)];
-
 /** Per-rig state shared by the part builders below. */
 class Kit {
   readonly lines = holoLine(INK.getHex(), 0.6);
@@ -245,7 +252,6 @@ class Kit {
   readonly cloud = holoCloud();
   readonly clouds: Points[] = [];
   readonly eyes: Object3D[] = [];
-  readonly folds: Fold[] = [];
   readonly edges: LineSegments[] = [];
 
   constructor(
@@ -274,11 +280,6 @@ class Kit {
     return g;
   }
 
-  /** Both eyes: `f` is the right-hand (+X) face; the left one is mirrored. */
-  eyes2(f: Tri, w: number[], c: P, r: number): Object3D[] {
-    return [this.eye(f, w, c, r), this.eye(f.map(mirror) as Tri, w, mirror(c), r)];
-  }
-
   /** Hangs `content` (authored in model space) from a pivot at `at`. */
   hinge(name: string, at: P, ...content: Object3D[]): Group {
     const g = new Group();
@@ -290,16 +291,13 @@ class Kit {
     g.add(inner);
     return g;
   }
-
-  fold(obj: Object3D, axis: P, angle: number, beat: number) {
-    this.folds.push({ obj, axis: new Vector3(...axis).normalize(), angle, beat });
-  }
 }
 
 interface Parts {
   body: Group;
-  morph?: Rig['morph'];
-  facetCount?: number;
+  flex: Rig['flex'];
+  morph: Rig['morph'];
+  facetCount: number;
   head?: Object3D;
   wingL?: Object3D;
   wingR?: Object3D;
@@ -317,6 +315,24 @@ function origami(k: Kit, data: BakedOrigami): Parts {
   const parts = new Map<string, Group>();
   const surfaces: { geometry: BufferGeometry; vertices: number[]; mesh: Mesh }[] = [];
   k.holo.side = k.core.side = FrontSide;
+  // Everything a rig part moves together hangs from the crease it shares with the rest.
+  const owners = new Map<number, Set<string>>();
+  for (const face of data.faces) {
+    for (const v of face.vertices) {
+      if (!owners.has(v)) owners.set(v, new Set());
+      owners.get(v)!.add(face.part);
+    }
+  }
+  const hinges = new Map<RigPart, ReturnType<typeof bestLine>>();
+  for (const field of new Set(Object.values(data.rig))) {
+    if (field === 'body') continue;
+    const inside = new Set(Object.entries(data.rig).filter(([, f]) => f === field).map(([part]) => part));
+    const seam: Position[] = [];
+    for (const [v, parts] of owners) {
+      if ([...parts].some(part => inside.has(part)) && [...parts].some(part => !inside.has(part))) seam.push(data.positions[v]);
+    }
+    if (seam.length > 1) hinges.set(field, bestLine(seam));
+  }
   for (const part of new Set(data.faces.map(face => face.part))) {
     const model = k.model();
     const vertices: number[] = [];
@@ -346,7 +362,9 @@ function origami(k: Kit, data: BakedOrigami): Parts {
     mesh.geometry.computeBoundingBox();
     mesh.geometry.computeBoundingSphere();
     surfaces.push({ geometry: mesh.geometry, vertices, mesh });
-    const group = k.hinge(part[0].toUpperCase() + part.slice(1), data.pivots[part]!, content);
+    const field = data.rig[part];
+    const hinge = field && hinges.get(field);
+    const group = k.hinge(part[0].toUpperCase() + part.slice(1), hinge ? hinge.centre : data.pivots[part]!, content);
     parts.set(part, group);
     body.add(group);
   }
@@ -359,13 +377,13 @@ function origami(k: Kit, data: BakedOrigami): Parts {
     const inside: P = [center[0] - n.x * eye.normalSign * .001, center[1] - n.y * eye.normalSign * .001, center[2] - n.z * eye.normalSign * .001];
     group.children[0].add(k.eye(face, eye.weights, inside, eye.radius));
   }
-  const hinges = [...parts.values()];
+  const groups = [...parts.values()];
   const morph = {
     stages: data.stages,
     apply(t: number) {
       fold.apply(t, positions);
       body.scale.setScalar(1);
-      for (let i = 0; i < hinges.length; i++) hinges[i].rotation.set(0, 0, 0);
+      for (let i = 0; i < groups.length; i++) groups[i].rotation.set(0, 0, 0);
       for (let s = 0; s < surfaces.length; s++) {
         const surface = surfaces[s], geometry = surface.geometry;
         const p = geometry.attributes.position, n = geometry.attributes.normal;
@@ -391,410 +409,22 @@ function origami(k: Kit, data: BakedOrigami): Parts {
       for (let i = 0; i < k.eyes.length; i++) k.eyes[i].visible = t >= 1;
     },
   };
-  const result: Parts = { body, morph, facetCount: data.faces.length };
+  const flex: Rig['flex'] = {};
+  for (const [field, hinge] of hinges) {
+    const moving = Object.entries(data.rig).filter(([, f]) => f === field).flatMap(([part]) => parts.get(part) ?? []);
+    flex[field] = new Flex(moving, new Vector3(...hinge.axis), hinge.residual);
+  }
+  const result: Parts = { body, flex, morph, facetCount: data.faces.length };
   for (const [part, field] of Object.entries(data.rig)) {
-    if (field !== 'body') result[field] = parts.get(part);
+    if (field !== 'body' && parts.has(part)) result[field] = parts.get(part);
   }
   return result;
 }
 
-function crane(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const F: P = [0, 0.05, -0.046];
-  const B: P = [0, 0.05, 0.046];
-  const R: P = [0.03, 0.052, 0];
-  const L = mirror(R);
-  m.solid(
-    [...cone([F, R, B, L], [0, 0.08, 0]), ...cone([F, R, B, L], [0, 0.004, 0])],
-    k.o,
-  );
-  body.add(m.build());
-
-  // Head: a small bent point at the top of the neck, beak forward and down.
-  const hm = k.model();
-  const ha: P = [-0.0045, 0.129, -0.088];
-  const hb: P = [0.0045, 0.129, -0.088];
-  const hc: P = [0, 0.141, -0.086];
-  const tip: P = [0, 0.116, -0.126];
-  const hf = tetra(ha, hb, hc, tip);
-  hm.solid(hf, k.o, 1.05);
-  const hcen = mean([ha, hb, hc, tip]);
-  const head = k.hinge('Head', [0, 0.132, -0.09], hm.build(), ...k.eyes2([hb, hc, tip], [0.45, 0.4, 0.15], hcen, 0.0032));
-
-  const nm = k.model();
-  nm.solid(tetra([-0.0065, 0.05, -0.036], [0.0065, 0.05, -0.036], [0, 0.068, -0.032], [0, 0.136, -0.092]), k.o, 0.95);
-  const neck = k.hinge('Neck', [0, 0.056, -0.038], nm.build(), head);
-  const tm = k.model();
-  tm.solid(tetra([-0.0065, 0.05, 0.036], [0.0065, 0.05, 0.036], [0, 0.068, 0.032], [0, 0.132, 0.104]), k.o, 0.95);
-  const tail = k.hinge('Tail', [0, 0.056, 0.038], tm.build());
-
-  const wing = (sx: number) => {
-    const w = k.model();
-    const s = (p: P): P => [p[0] * sx, p[1], p[2]];
-    const rf = s([0.006, 0.07, -0.034]);
-    const rm = s([0.008, 0.081, 0.004]);
-    const rb = s([0.006, 0.07, 0.038]);
-    const t = s([0.122, 0.104, 0.014]);
-    w.sheet(rf, rm, t, k.o, k.o, 1.06);
-    w.sheet(rm, rb, t, k.o, k.o, 0.97);
-    return k.hinge(sx > 0 ? 'WingR' : 'WingL', s([0.004, 0.072, 0]), w.build());
-  };
-  const wingR = wing(1);
-  const wingL = wing(-1);
-  body.add(neck, tail, wingL, wingR);
-  k.fold(wingR, [0, 0, 1], -0.95, 1);
-  k.fold(wingL, [0, 0, 1], 0.95, 1);
-  k.fold(neck, [1, 0, 0], -0.95, 2);
-  k.fold(tail, [1, 0, 0], 0.86, 2);
-  k.fold(head, [1, 0, 0], 0.7, 3);
-  return { body, head, wingL, wingR, tail };
-}
-
-function frog(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const N: P = [0, 0.032, -0.064];
-  const R: P = [0.05, 0.028, 0.002];
-  const B: P = [0, 0.036, 0.054];
-  const L = mirror(R);
-  const c: P = [0, 0.036, 0];
-  m.solid(cone([N, R, B, L], [0, 0.074, -0.006]), k.o, 1, c);
-  m.solid(cone([N, R, B, L], [0, 0.002, 0]), k.i, 0.92, c);
-  // Front legs splay forward onto the ground.
-  m.sheet([0.028, 0.02, -0.04], [0.058, 0.001, -0.074], [0.026, 0.001, -0.064], k.o, k.i);
-  m.sheet(mirror([0.028, 0.02, -0.04]), mirror([0.026, 0.001, -0.064]), mirror([0.058, 0.001, -0.074]), k.o, k.i);
-  body.add(m.build());
-
-  // Eye bumps: little pyramids with the ink dots on their front faces.
-  const em = k.model();
-  const ea: P = [0.01, 0.057, -0.04];
-  const eb: P = [0.038, 0.05, -0.032];
-  const ec: P = [0.024, 0.064, -0.012];
-  const ex: P = [0.025, 0.079, -0.03];
-  const bump = tetra(ea, eb, ec, ex);
-  em.solid(bump, k.o, 1.04);
-  em.solid(bump.map((f) => f.map(mirror) as Tri), k.o, 1.04);
-  const eyes = k.eyes2([ea, eb, ex], [0.3, 0.3, 0.4], mean([ea, eb, ec, ex]), 0.0055);
-  const head = k.hinge('Head', [0, 0.05, -0.02], em.build(), ...eyes);
-
-  const leg = (sx: number) => {
-    const s = (p: P): P => [p[0] * sx, p[1], p[2]];
-    const g = k.model();
-    const hip = s([0.032, 0.042, -0.002]);
-    const knee = s([0.07, 0.036, 0.032]);
-    const heel = s([0.036, 0.003, 0.04]);
-    const toe = s([0.062, 0.001, 0.074]);
-    if (sx < 0) {
-      g.sheet(hip, knee, heel, k.o, k.i, 1.04);
-      g.sheet(knee, toe, heel, k.o, k.i, 0.95);
-    } else {
-      g.sheet(hip, heel, knee, k.o, k.i, 1.04);
-      g.sheet(knee, heel, toe, k.o, k.i, 0.95);
-    }
-    return k.hinge(sx > 0 ? 'LegR' : 'LegL', s([0.034, 0.03, 0.02]), g.build());
-  };
-  const legR = leg(1);
-  const legL = leg(-1);
-  body.add(head, legL, legR);
-  k.fold(legR, [0, 0, 1], -0.5, 1);
-  k.fold(legL, [0, 0, 1], 0.5, 1);
-  k.fold(head, [1, 0, 0], -0.6, 2);
-  return { body, head, legL, legR };
-}
-
-function fox(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const F: P = [0, 0, -0.036];
-  const R: P = [0.044, 0, 0.012];
-  const B: P = [0, 0, 0.052];
-  const L = mirror(R);
-  const A: P = [0, 0.094, -0.004];
-  const bc = mean([F, R, B, L, A]);
-  m.solid([...cone([F, R, B, L], A), [F, L, B], [F, B, R]], k.o, 1, bc);
-  // White chest: a sheet laid over the front ridge.
-  const lift = (p: P, d: number): P => [p[0], p[1], p[2] - d];
-  const top = lift(mix([A, F], [0.78, 0.22]), 0.0016);
-  const fl = lift(mix([A, F, L], [0.16, 0.6, 0.24]), 0.0016);
-  const fr = lift(mix([A, F, R], [0.16, 0.6, 0.24]), 0.0016);
-  const fb = lift(mix([A, F], [0.12, 0.88]), 0.0022);
-  m.sheet(top, fl, fb, k.i, k.i);
-  m.sheet(top, fb, fr, k.i, k.i);
-  body.add(m.build());
-
-  const hm = k.model();
-  const TL: P = [-0.037, 0.118, -0.006];
-  const TR = mirror(TL);
-  const Fh: P = [0, 0.128, -0.024];
-  const S: P = [0, 0.08, -0.07];
-  const Bk: P = [0, 0.124, 0.022];
-  const C: P = [0, 0.084, 0.002];
-  const hc = mean([TL, TR, Fh, S, Bk, C]);
-  const faceR: Tri = [Fh, TR, S];
-  hm.solid(
-    [[TL, Fh, S], faceR, [TL, Bk, Fh], [Fh, Bk, TR], [TL, S, C], [TR, C, S], [TL, C, Bk], [TR, Bk, C]],
-    k.o,
-    1.03,
-    hc,
-  );
-  // Nose tip.
-  hm.solid(tetra([-0.005, 0.083, -0.064], [0.005, 0.083, -0.064], [0, 0.088, -0.06], [0, 0.079, -0.073]), INK, 1);
-  const ear = (sx: number) => {
-    const s = (p: P): P => [p[0] * sx, p[1], p[2]];
-    const a = s([0.012, 0.12, -0.012]);
-    const b = s([0.039, 0.118, -0.006]);
-    const c = s([0.026, 0.123, 0.012]);
-    const tip = s([0.033, 0.172, -0.002]);
-    const e = k.model();
-    e.solid(tetra(a, b, c, tip), k.o, 1.08);
-    const inA = mix([a, b, tip], [0.42, 0.42, 0.16]);
-    const inB = mix([a, tip, b], [0.8, 0.1, 0.1]);
-    const inC = mix([b, tip, a], [0.8, 0.1, 0.1]);
-    const out = (p: P): P => [p[0], p[1] + 0.0004, p[2] - 0.0016];
-    e.sheet(out(inB), out(inC), out(mix([inA, tip], [0.2, 0.8])), k.i, k.i);
-    return k.hinge(sx > 0 ? 'EarR' : 'EarL', s([0.026, 0.12, 0]), e.build());
-  };
-  const earR = ear(1);
-  const earL = ear(-1);
-  const eyes = k.eyes2(faceR, [0.34, 0.4, 0.26], hc, 0.0048);
-  const head = k.hinge('Head', [0, 0.09, -0.006], hm.build(), earL, earR, ...eyes);
-
-  const t = k.model();
-  const r0: P = [0.012, 0.012, 0.042];
-  const mt: P = [0.062, 0.05, 0.052];
-  const mb: P = [0.066, 0.004, 0.068];
-  const tip: P = [0.12, 0.02, 0.06];
-  t.sheet(r0, mt, tip, k.o, k.o, 1.04);
-  t.sheet(r0, tip, mb, k.o, k.o, 0.94);
-  const lt = mix([mt, tip], [0.4, 0.6]);
-  const lb = mix([mb, tip], [0.4, 0.6]);
-  t.sheet([lt[0], lt[1], lt[2] - 0.0012], [tip[0], tip[1], tip[2] - 0.0012], [lb[0], lb[1], lb[2] - 0.0012], k.i, k.i);
-  const tail = k.hinge('Tail', [0.014, 0.01, 0.04], t.build());
-  body.add(head, tail);
-  k.fold(tail, [0, 1, 0], 1.1, 1);
-  k.fold(head, [1, 0, 0], -0.9, 2);
-  k.fold(earL, [0, 0, 1], 1.2, 3);
-  k.fold(earR, [0, 0, 1], -1.2, 3);
-  return { body, head, tail, earL, earR };
-}
-
-function fish(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const N: P = [0, 0.004, -0.084];
-  const R: P = [0.022, 0.004, -0.012];
-  const K: P = [0, 0.004, 0.05];
-  const L = mirror(R);
-  const T: P = [0, 0.05, -0.008];
-  const D: P = [0, -0.042, -0.002];
-  const c = mean([N, R, K, L, T, D]);
-  m.solid(cone([N, R, K, L], T), k.o, 1, c);
-  m.solid(cone([N, R, K, L], D), k.i, 0.95, c);
-  m.sheet([0, 0.046, -0.014], [0, 0.04, 0.016], [0, 0.07, 0.014], k.o);
-  m.sheet([0.018, 0.0, -0.024], [0.042, -0.014, 0.002], [0.018, -0.006, 0.002], k.o, k.i);
-  m.sheet(mirror([0.018, 0.0, -0.024]), mirror([0.018, -0.006, 0.002]), mirror([0.042, -0.014, 0.002]), k.o, k.i);
-  const eyes = k.eyes2([T, N, R], [0.24, 0.48, 0.28], c, 0.0055);
-  body.add(m.build(), ...eyes);
-  const t = k.model();
-  const root: P = [0, 0.004, 0.046];
-  const mid: P = [0.005, 0.006, 0.086];
-  t.sheet(root, [0, 0.054, 0.106], mid, k.o, k.o, 1.04);
-  t.sheet(root, mid, [0, -0.044, 0.106], k.o, k.o, 0.94);
-  const tail = k.hinge('Tail', root, t.build());
-  body.add(tail);
-  k.fold(tail, [0, 0, 1], 1.4, 1);
-  return { body, tail };
-}
-
-function butterfly(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const dark = new Color(0x3b3027);
-  const c: P = [0, 0.007, 0.002];
-  m.solid(
-    [...cone([[0, 0.007, -0.03], [0.006, 0.007, 0], [0, 0.007, 0.04], [-0.006, 0.007, 0]], [0, 0.014, 0]),
-      ...cone([[0, 0.007, -0.03], [0.006, 0.007, 0], [0, 0.007, 0.04], [-0.006, 0.007, 0]], [0, 0.0, 0])],
-    dark,
-    1,
-    c,
-  );
-  const H: P[] = [[0, 0.009, -0.044], [0.008, 0.009, -0.034], [0, 0.009, -0.026], [-0.008, 0.009, -0.034]];
-  const hc: P = [0, 0.009, -0.035];
-  const headFaces = [...cone(H, [0, 0.018, -0.035]), ...cone(H, [0, 0.0, -0.035])];
-  m.solid(headFaces, dark, 1.1, hc);
-  m.sheet([0.002, 0.014, -0.04], [0.004, 0.016, -0.04], [0.016, 0.03, -0.066], dark, dark);
-  m.sheet(mirror([0.002, 0.014, -0.04]), mirror([0.016, 0.03, -0.066]), mirror([0.004, 0.016, -0.04]), dark, dark);
-  const eyes = k.eyes2([H[0], H[1], [0, 0.018, -0.035]], [0.4, 0.4, 0.2], hc, 0.0028);
-  body.add(m.build(), ...eyes);
-  const wing = (sx: number) => {
-    const s = (p: P): P => [p[0] * sx, p[1], p[2]];
-    const w = k.model();
-    const tri = (a: P, b: P, cc: P, col: Color, shade = 1) =>
-      sx > 0 ? w.sheet(s(a), s(b), s(cc), col, col, shade) : w.sheet(s(a), s(cc), s(b), col, col, shade);
-    // Forewing with a crease from root to the outer corner, hindwing below.
-    tri([0.003, 0.008, -0.024], [0.09, 0.012, -0.058], [0.072, 0.01, -0.004], k.o, 1.06);
-    tri([0.003, 0.008, -0.024], [0.072, 0.01, -0.004], [0.004, 0.008, 0.002], k.o, 0.96);
-    tri([0.004, 0.0075, 0.0], [0.066, 0.008, 0.012], [0.04, 0.0075, 0.058], k.o, 0.9);
-    tri([0.004, 0.0075, 0.0], [0.04, 0.0075, 0.058], [0.006, 0.0075, 0.03], k.o, 0.84);
-    const up = 0.0009;
-    tri([0.05, 0.010 + up, -0.03], [0.07, 0.0105 + up, -0.042], [0.064, 0.0102 + up, -0.016], k.i);
-    tri([0.032, 0.0078 + up, 0.02], [0.046, 0.0079 + up, 0.03], [0.034, 0.0078 + up, 0.04], k.i);
-    return k.hinge(sx > 0 ? 'WingR' : 'WingL', s([0.002, 0.008, 0]), w.build());
-  };
-  const wingR = wing(1);
-  const wingL = wing(-1);
-  wingR.rotation.z = 0.5;
-  wingL.rotation.z = -0.5;
-  body.add(wingL, wingR);
-  k.fold(wingR, [0, 0, 1], -0.5, 1);
-  k.fold(wingL, [0, 0, 1], 0.5, 1);
-  return { body, wingL, wingR };
-}
-
-function boat(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const FT: P = [0, 0.046, -0.094];
-  const BT: P = [0, 0.046, 0.094];
-  const KF: P = [-0.012, 0, -0.048];
-  const KB: P = [-0.012, 0, 0.048];
-  const KF2 = mirror(KF);
-  const KB2 = mirror(KB);
-  const RL: P = [-0.04, 0.046, 0];
-  const RR = mirror(RL);
-  const c: P = [0, 0.022, 0];
-  const bow: Tri = [FT, KF2, RR];
-  m.solid(
-    [[FT, RL, KF], [RL, KB, KF], [RL, BT, KB], bow, [RR, KF2, KB2], [RR, KB2, BT], [KF, KB, KB2], [KF, KB2, KF2], [FT, KF, KF2], [BT, KB2, KB]],
-    k.o,
-    1,
-    c,
-  );
-  m.solid([[FT, RR, RL], [RL, RR, BT]], k.o, 1.12, c);
-  // The tent-shaped sail of a paper boat, white inside out.
-  const sail = k.model();
-  const sl: P = [-0.007, 0.044, -0.06];
-  const sb: P = [-0.007, 0.044, 0.06];
-  const top: P = [0, 0.124, 0];
-  sail.solid([[sl, sb, top], [mirror(sl), top, mirror(sb)], [sl, mirror(sl), top], [sb, top, mirror(sb)]], k.i, 1, [0, 0.07, 0]);
-  const eyes = k.eyes2(bow, [0.3, 0.28, 0.42], c, 0.0062);
-  const sailPivot = k.hinge('Sail', [0, 0.046, 0], sail.build());
-  body.add(m.build(), sailPivot, ...eyes);
-  k.fold(sailPivot, [0, 0, 1], 1.5, 1);
-  return { body, tail: sailPivot };
-}
-
-function rabbit(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const ring: P[] = [
-    [0, 0.032, -0.032],
-    [0.032, 0.034, -0.012],
-    [0.032, 0.038, 0.026],
-    [0, 0.042, 0.048],
-    [-0.032, 0.038, 0.026],
-    [-0.032, 0.034, -0.012],
-  ];
-  const c: P = [0, 0.036, 0.008];
-  m.solid(cone(ring, [0, 0.078, 0.012]), k.o, 1, c);
-  m.solid(cone(ring, [0, 0.0, 0.01]), k.o, 0.9, c);
-  const tc: P = [0, 0.034, 0.056];
-  const puff: P[] = [[0, 0.034, 0.046], [0.012, 0.034, 0.056], [0, 0.034, 0.068], [-0.012, 0.034, 0.056]];
-  m.solid([...cone(puff, [0, 0.048, 0.056]), ...cone(puff, [0, 0.02, 0.056])], k.i, 1, tc);
-  m.sheet([0.012, 0.016, -0.03], [0.022, 0.001, -0.05], [0.006, 0.001, -0.046], k.o, k.i);
-  m.sheet(mirror([0.012, 0.016, -0.03]), mirror([0.006, 0.001, -0.046]), mirror([0.022, 0.001, -0.05]), k.o, k.i);
-  body.add(m.build());
-
-  const hm = k.model();
-  const Fr: P = [0, 0.084, -0.062];
-  const Bk: P = [0, 0.1, 0.006];
-  const Tp: P = [0, 0.122, -0.022];
-  const Bt: P = [0, 0.07, -0.022];
-  const Rt: P = [0.03, 0.096, -0.024];
-  const Lt = mirror(Rt);
-  const hc = mean([Fr, Bk, Tp, Bt, Rt, Lt]);
-  const faceR: Tri = [Tp, Fr, Rt];
-  hm.solid([...cone([Fr, Rt, Bk, Lt], Tp), ...cone([Fr, Rt, Bk, Lt], Bt)], k.o, 1.03, hc);
-  hm.solid(tetra([-0.006, 0.087, -0.058], [0.006, 0.087, -0.058], [0, 0.092, -0.056], [0, 0.084, -0.066]), k.i, 0.95);
-  const ear = (sx: number) => {
-    const s = (p: P): P => [p[0] * sx, p[1], p[2]];
-    const e = k.model();
-    const a = s([0.004, 0.116, -0.02]);
-    const b = s([0.024, 0.112, -0.01]);
-    const ridge = s([0.016, 0.118, -0.006]);
-    const tip = s([0.022, 0.19, 0.004]);
-    const f = (p: P, q: P, r: P, col: Color, sh: number) => (sx > 0 ? e.sheet(p, q, r, col, k.o, sh) : e.sheet(p, r, q, col, k.o, sh));
-    f(a, ridge, tip, k.o, 1.06);
-    f(ridge, b, tip, k.o, 0.96);
-    const inner = (p: P): P => [p[0], p[1], p[2] - 0.0014];
-    f(inner(mix([a, ridge], [0.6, 0.4])), inner(mix([ridge, b], [0.4, 0.6])), inner(mix([ridge, tip], [0.15, 0.85])), k.i, 1);
-    return k.hinge(sx > 0 ? 'EarR' : 'EarL', s([0.014, 0.114, -0.012]), e.build());
-  };
-  const earR = ear(1);
-  const earL = ear(-1);
-  const eyes = k.eyes2(faceR, [0.32, 0.3, 0.38], hc, 0.0048);
-  const head = k.hinge('Head', [0, 0.074, -0.012], hm.build(), earL, earR, ...eyes);
-  head.scale.setScalar(1.2);
-  body.add(head);
-  k.fold(head, [1, 0, 0], -0.8, 1);
-  k.fold(earL, [0, 0, 1], 1.3, 2);
-  k.fold(earR, [0, 0, 1], -1.3, 2);
-  return { body, head, earL, earR };
-}
-
-function whale(k: Kit): Parts {
-  const body = new Group();
-  const m = k.model();
-  const ring: P[] = [
-    [0, -0.004, -0.186],
-    [0.054, 0.0, -0.13],
-    [0.08, 0.002, -0.03],
-    [0.04, 0.008, 0.09],
-    [0, 0.012, 0.15],
-    [-0.04, 0.008, 0.09],
-    [-0.08, 0.002, -0.03],
-    [-0.054, 0.0, -0.13],
-  ];
-  const T: P = [0, 0.092, -0.06];
-  const D: P = [0, -0.066, -0.07];
-  const c = mean([...ring, T, D]);
-  const top = cone(ring, T);
-  m.solid(top, k.o, 1, c);
-  m.solid(cone(ring, D), k.i, 0.95, c);
-  m.sheet([0.066, -0.012, -0.074], [0.066, -0.014, -0.034], [0.128, -0.03, -0.03], k.o, k.i);
-  m.sheet(mirror([0.066, -0.012, -0.074]), mirror([0.128, -0.03, -0.03]), mirror([0.066, -0.014, -0.034]), k.o, k.i);
-  const eyes = k.eyes2(top[1], [0.24, 0.5, 0.26], c, 0.0085);
-  body.add(m.build(), ...eyes);
-  const t = k.model();
-  const root: P = [0, 0.012, 0.146];
-  const fr: P = [0.1, 0.034, 0.226];
-  const fm: P = [0.012, 0.018, 0.2];
-  t.sheet(root, fm, fr, k.o, k.i, 1.04);
-  t.sheet(root, mirror(fr), mirror(fm), k.o, k.i, 1.04);
-  t.sheet(root, mirror(fm), fm, k.o, k.i, 0.9);
-  const tail = k.hinge('Tail', root, t.build());
-  body.add(tail);
-  k.fold(tail, [1, 0, 0], 0.6, 1);
-  return { body, tail };
-}
-
-const BUILDERS: Record<CreatureKind, (k: Kit) => Parts> = {
-  crane,
-  frog,
-  fox,
-  fish,
-  butterfly,
-  boat,
-  rabbit,
-  whale,
-};
-
 /** Builds a fresh rig in the given outer (`front`) and inner paper colours. */
 export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
   const k = new Kit(new Color(front), new Color(back));
-  const data = (baked as Partial<Record<CreatureKind, BakedOrigami>>)[kind];
-  const parts = data ? origami(k, data) : BUILDERS[kind](k);
+  const parts = origami(k, (baked as Record<CreatureKind, BakedOrigami>)[kind]);
   const root = new Group();
   root.name = `Creature_${kind}`;
   parts.body.name = 'Body';
@@ -811,7 +441,7 @@ export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
     legR: parts.legR,
     earL: parts.earL,
     earR: parts.earR,
-    folds: k.folds,
+    flex: parts.flex,
     morph: parts.morph,
     facetCount: parts.facetCount,
     lines: k.lines,

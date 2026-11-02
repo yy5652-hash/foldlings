@@ -4,7 +4,7 @@
  * their own voice, and can fold themselves up out of a flat sheet.
  */
 
-import { Box3, Color, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
+import { Box3, Color, Group, LineSegments, Mesh, MeshBasicMaterial, Object3D, Vector3 } from '@iwsdk/core';
 import { buildRig, type Rig } from './creature-models.js';
 import { HoloVolume } from './holo-volume.js';
 import type { CreatureKind } from './levels.js';
@@ -24,20 +24,11 @@ export const HABITAT: Record<CreatureKind, Habitat> = {
   whale: 'high-air',
 };
 
-/** Largest resting span in centimetres, folded from a 20 cm sheet. */
-export const REAL_SPAN: Record<CreatureKind, number> = {
-  crane: 15, frog: 9, fox: 10, fish: 12, butterfly: 12, boat: 14, rabbit: 10, whale: 14,
-};
-
-/** Seconds per fold-up beat; the body opens on beat 0, parts on 1–3. */
+/** Seconds per stage of the fold-up. */
 export const FOLD_BEAT = 0.36;
 
 const INK = new Color(0x9fe9ff);
 const GOLD = new Color(0xffffff);
-const easeBack = (x: number) => {
-  const c = 1.9;
-  return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2);
-};
 
 /** Crease lines show only within this distance of the viewer. */
 const DETAIL_RANGE = 1.7;
@@ -63,11 +54,9 @@ export class Creature {
   private foldT = -1;
   private beat = -1;
   private lastBeat: number;
-  private rest: Quaternion[];
-  private headRest = new Quaternion();
   private lookTarget: Vector3 | null = null;
-  private q = new Quaternion();
-  private e = new Euler(0, 0, 0, 'YXZ');
+  private lookYaw = 0;
+  private lookPitch = 0;
   private v = new Vector3();
 
   constructor(kind: CreatureKind, private paperLook: PaperLook) {
@@ -82,9 +71,7 @@ export class Creature {
     this.bob.add(this.rig.body);
     this.root.add(this.bob);
     this.root.scale.setScalar(this.restScale);
-    this.rest = this.rig.folds.map((f) => f.obj.quaternion.clone());
-    this.lastBeat = this.rig.morph ? this.rig.morph.stages - 1 : this.rig.folds.reduce((m, f) => Math.max(m, f.beat), 0);
-    if (this.rig.head) this.headRest.copy(this.rig.head.quaternion);
+    this.lastBeat = this.rig.morph.stages - 1;
     const target = this.root as unknown as {
       addEventListener(type: string, fn: () => void): void;
     };
@@ -141,29 +128,12 @@ export class Creature {
   private applyFold() {
     const t = this.foldT;
     const beat = Math.floor(t / FOLD_BEAT);
-    if (this.rig.morph) {
-      while (this.beat < Math.min(beat, this.lastBeat)) {
-        this.flash = 1;
-        sfx.foldBeat(++this.beat);
-      }
-      this.bob.scale.setScalar(1);
-      this.rig.morph.apply(t / this.foldDuration);
-      for (let i = 0; i < this.rig.eyes.length; i++) this.rig.eyes[i].scale.y = 0.08;
-      return;
-    }
-    if (beat !== this.beat && beat <= this.lastBeat) {
-      this.beat = beat;
+    while (this.beat < Math.min(beat, this.lastBeat)) {
       this.flash = 1;
-      sfx.foldBeat(beat);
+      sfx.foldBeat(++this.beat);
     }
-    const p = (b: number) => Math.min(1, Math.max(0, (t - b * FOLD_BEAT) / FOLD_BEAT));
-    const open = easeBack(p(0));
-    this.bob.scale.set(1 + (1 - open) * 0.3, Math.max(0.04, open), 1 + (1 - open) * 0.3);
-    this.rig.folds.forEach((f, i) => {
-      const k = 1 - easeBack(p(f.beat));
-      f.obj.quaternion.copy(this.rest[i]).multiply(this.q.setFromAxisAngle(f.axis, f.angle * k));
-    });
-    for (const e of this.rig.eyes) e.scale.y = 0.08;
+    this.rig.morph.apply(t / this.foldDuration);
+    for (let i = 0; i < this.rig.eyes.length; i++) this.rig.eyes[i].scale.y = 0.08;
   }
 
   update(dt: number) {
@@ -182,13 +152,9 @@ export class Creature {
     if (this.foldT >= 0) {
       this.foldT += dt;
       if (this.foldT >= this.foldDuration) {
-        if (this.rig.morph) {
-          this.applyFold();
-          this.rig.morph.apply(1);
-        }
+        this.applyFold();
+        this.rig.morph.apply(1);
         this.foldT = -1;
-        this.bob.scale.setScalar(1);
-        this.rig.folds.forEach((f, i) => f.obj.quaternion.copy(this.rest[i]));
         this.blinkT = 0.1; // eyes open as it wakes up
       } else {
         this.applyFold();
@@ -198,6 +164,8 @@ export class Creature {
     this.react = Math.max(0, this.react - dt * 1.4);
     this.hop = Math.max(0, this.hop - dt * 2.2);
     this.blink(dt);
+    // A specimen under the scanner holds still, so the volume inside it stays true.
+    if (this.presenting) return;
     this.look(dt);
     this.idle();
   }
@@ -218,66 +186,80 @@ export class Creature {
   }
 
   private look(dt: number) {
-    const head = this.rig.head;
-    if (!head || !head.parent) return;
+    // Paper can't twist at the neck: the whole creature turns, and the head only nods about its crease.
     let yaw = 0;
     let pitch = 0;
     if (this.lookTarget) {
-      head.parent.updateWorldMatrix(true, false);
       this.v.copy(this.lookTarget);
-      head.parent.worldToLocal(this.v).sub(head.position);
-      yaw = Math.max(-0.9, Math.min(0.9, Math.atan2(-this.v.x, -this.v.z)));
+      this.root.worldToLocal(this.v);
+      yaw = Math.max(-0.7, Math.min(0.7, Math.atan2(-this.v.x, -this.v.z)));
       pitch = Math.max(-0.4, Math.min(0.5, Math.atan2(this.v.y, Math.hypot(this.v.x, this.v.z))));
     }
-    // A curious tilt when poked.
-    this.e.set(pitch * 0.7, yaw, Math.sin(this.react * Math.PI) * 0.35);
-    this.q.setFromEuler(this.e).premultiply(this.headRest);
-    head.quaternion.slerp(this.q, Math.min(1, dt * 5));
+    this.lookYaw += (yaw - this.lookYaw) * Math.min(1, dt * 3);
+    this.lookPitch += (pitch - this.lookPitch) * Math.min(1, dt * 5);
+    if (this.habitat !== 'wall') this.bob.rotation.y = this.lookYaw;
+    this.rig.flex.head?.turn(this.lookPitch * 0.7 + Math.sin(this.react * Math.PI) * 0.35, 1, 0, 0);
   }
 
+  /** Back to the pose it was folded into. */
+  private holdStill() {
+    const f = this.rig.flex;
+    f.head?.turn(0, 1, 0, 0);
+    f.wingL?.turn(0, 0, 0, 1);
+    f.wingR?.turn(0, 0, 0, 1);
+    f.tail?.turn(0, 1, 0, 0);
+    f.legL?.turn(0, 0, 0, 1);
+    f.legR?.turn(0, 0, 0, 1);
+    f.earL?.turn(0, 1, 0, 0);
+    f.earR?.turn(0, 1, 0, 0);
+    this.rig.body.rotation.set(0, 0, 0);
+    this.bob.position.y = 0;
+    this.bob.rotation.y = 0;
+    this.lookYaw = this.lookPitch = 0;
+  }
+
+  /** Life without stretching: rigid motion of the whole sheet, and parts turning about their creases. */
   private idle() {
     const t = this.t;
     const r = this.react;
-    const { wingL, wingR, tail, legL, legR, earL, earR, body } = this.rig;
+    const { body, flex: f } = this.rig;
     const hopY = Math.sin(this.hop * Math.PI) * 0.05;
-    const breathe = 1 + Math.sin(t * 2.2) * 0.018;
+    const leap = Math.sin(this.hop * Math.PI);
     switch (this.kind) {
       case 'crane': {
         const flap = this.travelling || r > 0 ? Math.sin(t * 14) * 0.7 : Math.sin(t * 1.3) * 0.06 + 0.04;
-        wingL!.rotation.z = -flap;
-        wingR!.rotation.z = flap;
-        tail!.rotation.x = Math.sin(t * 0.9) * 0.04;
+        f.wingL?.turn(-flap, 0, 0, 1);
+        f.wingR?.turn(flap, 0, 0, 1);
+        f.tail?.turn(Math.sin(t * 0.9) * 0.04, 1, 0, 0);
         this.bob.position.y = hopY * 0.6;
-        body.scale.set(1, breathe, 1);
         break;
       }
       case 'butterfly': {
-        const flap = this.travelling || r > 0 ? Math.sin(t * 22) * 0.9 : Math.max(0, Math.sin(t * 1.7)) * 0.5;
-        wingR!.rotation.z = 0.5 + flap;
-        wingL!.rotation.z = -0.5 - flap;
+        const flap = this.travelling || r > 0 ? 0.25 + Math.sin(t * 22) * 0.65 : Math.max(0, Math.sin(t * 1.7)) * 0.5;
+        f.wingR?.turn(flap, 0, 0, 1);
+        f.wingL?.turn(-flap, 0, 0, 1);
         this.bob.position.y = hopY * 0.4;
         break;
       }
       case 'fish': {
         const k = this.travelling || r > 0 ? 9 : 3;
-        tail!.rotation.y = Math.sin(t * k) * 0.45;
-        body.rotation.y = Math.sin(t * k + 1.2) * 0.08;
+        f.tail?.turn(Math.sin(t * k) * 0.45, 0, 1, 0);
+        body.rotation.y = Math.sin(t * k + 1.2) * 0.16;
         this.bob.position.y = Math.sin(t * 0.9) * 0.01 + hopY * 0.4;
         break;
       }
       case 'whale': {
-        tail!.rotation.x = Math.sin(t * 1.2) * 0.3;
-        body.rotation.x = Math.sin(t * 1.2 + 0.8) * 0.05;
+        f.tail?.turn(Math.sin(t * 1.2) * 0.3, 1, 0, 0);
+        body.rotation.x = Math.sin(t * 1.2 + 0.8) * 0.08;
         this.bob.position.y = Math.sin(t * 0.5) * 0.02 + hopY * 0.3;
         break;
       }
       case 'fox': {
-        tail!.rotation.y = Math.sin(t * 2.2) * 0.25 + r * Math.sin(t * 20) * 0.4;
+        f.tail?.turn(Math.sin(t * 2.2) * 0.25 + r * Math.sin(t * 20) * 0.4, 0, 1, 0);
         // An ear flick now and then.
         const flick = Math.max(0, Math.sin(t * 0.8) - 0.96) * 12;
-        earL!.rotation.z = flick * 0.3;
-        earR!.rotation.z = -r * 0.3;
-        body.scale.set(1, breathe, 1);
+        f.earL?.turn(flick * 0.3, 0, 0, 1);
+        f.earR?.turn(-r * 0.3, 0, 0, 1);
         this.bob.position.y = hopY * 0.5;
         break;
       }
@@ -288,20 +270,17 @@ export class Creature {
         break;
       }
       case 'frog': {
-        const squash = 1 + Math.sin(t * 2.4) * 0.03 - Math.sin(this.hop * Math.PI) * 0.12;
-        body.scale.set(1 / Math.sqrt(squash), squash, 1 / Math.sqrt(squash));
-        legR!.rotation.z = -Math.sin(this.hop * Math.PI) * 0.5;
-        legL!.rotation.z = Math.sin(this.hop * Math.PI) * 0.5;
+        // The back legs are its spring.
+        const spring = Math.sin(t * 2.4) * 0.03 + leap * 0.5;
+        f.legR?.turn(spring, 0, 0, 1);
+        f.legL?.turn(-spring, 0, 0, 1);
         this.bob.position.y = hopY;
         break;
       }
       default: {
-        // Rabbit: breathing squash, hop on poke, ears that twitch.
-        const squash = 1 + Math.sin(t * 2.6) * 0.025 - Math.sin(this.hop * Math.PI) * 0.1;
-        body.scale.set(1 / Math.sqrt(squash), squash, 1 / Math.sqrt(squash));
         const twitch = Math.max(0, Math.sin(t * 1.1) - 0.95) * 10;
-        earL!.rotation.x = -twitch * 0.25 - r * 0.3;
-        earR!.rotation.x = -r * 0.3;
+        f.earL?.turn(-twitch * 0.25 - r * 0.3, 1, 0, 0);
+        f.earR?.turn(-r * 0.3, 1, 0, 0);
         this.bob.position.y = hopY;
       }
     }
@@ -310,17 +289,17 @@ export class Creature {
   /** Shows the inner layer while the creature is on the projection table. */
   setPresenting(on: boolean) {
     this.presenting = on;
-    // Real paper has its inner side to show; only a schematic solid needs a core.
-    for (const c of this.rig.cores) c.visible = on && !this.rig.morph;
+    if (on) this.holdStill();
+    // Real paper has its inner side to show; there is no solid core to reveal.
+    for (const c of this.rig.cores) c.visible = false;
     if (on && !this.volume) {
       this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
       this.volume.mesh.position.y += this.rig.body.position.y;
       this.volume.sand.position.y += this.rig.body.position.y;
       this.bob.add(this.volume.mesh, this.volume.sand);
     }
-    // Keep real paper thin; the legacy solids retain their presentation depth.
-    this.rig.holo.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.0105 : 0.0058;
-    this.rig.core.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.008 : 0.0058;
+    this.rig.holo.uniforms.uThick.value = 0.0016;
+    this.rig.core.uniforms.uThick.value = 0.0016;
     // Thick layers overlap, so each one burns lower to keep the form readable.
     this.rig.holo.uniforms.uGlow.value = on && !this.rig.morph ? 0.6 : 1;
     this.rig.core.uniforms.uGlow.value = on ? 0.52 : 0.8;
@@ -351,24 +330,18 @@ export class Creature {
     this.volume?.setScan(y);
   }
 
-  /** World height the body has formed up to; anything high means all of it. */
-  setForming(y: number) {
-    this.rig.holo.uniforms.uReveal.value = y;
-    this.rig.core.uniforms.uReveal.value = y;
-  }
-
   /** The scale at which this kind stands about half a metre across on the table. */
   get tableScale(): number {
     return this.scanScale;
   }
 
+  /** A baked model already is what the 20 cm sheet folds into. */
   get restScale(): number {
-    // A baked model already is what the 20 cm sheet folds into.
-    return this.rig.morph ? 1 : REAL_SPAN[this.kind] / (100 * this.modelSpan);
+    return 1;
   }
 
   get realSpanCm(): number {
-    return this.rig.morph ? Math.round(this.modelSpan * 1000) / 10 : REAL_SPAN[this.kind];
+    return Math.round(this.modelSpan * 1000) / 10;
   }
 
   get magnification(): number {
@@ -377,12 +350,7 @@ export class Creature {
 
   /** How many flat faces the model is made of. */
   get facets(): number {
-    if (this.rig.facetCount !== undefined) return this.rig.facetCount;
-    let n = 0;
-    this.root.traverse((o) => {
-      if ((o as Mesh).isMesh && o.name === 'Paper') n += (o as Mesh).geometry.attributes.position.count / 3;
-    });
-    return n;
+    return this.rig.facetCount;
   }
 
   /** Points on the body for labels to be tied to. */

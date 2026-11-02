@@ -26,6 +26,9 @@ export interface BakeResult extends BakedOrigami {
     wingspan: number; height: number; length: number; closure: number;
     worstStrain: number; rmsStrain: number; planarity: number;
     constraints: number;
+    /** Degrees it tipped to come to rest, and how far inside its contact outline its weight then sits (m). */
+    restTilt: number;
+    restMargin: number;
     silhouette: Record<string, number | number[]>;
   };
 }
