@@ -5,6 +5,7 @@
  */
 
 import { Entity, Group, Mesh, PokeInteractable, RayInteractable, Shape, ShapeGeometry, MeshBasicMaterial, Color, Vector3, World } from '@iwsdk/core';
+import { viewFov } from './view-fov.js';
 import { Button } from './button.js';
 import { CONTROL_GLASS, DISPLAY, floatOverRoom, GlassWindow, hitPlane, INK, LAYER, setFont, Spring, Surface, TextLabel } from './glass.js';
 import type { Best, Result } from './score.js';
@@ -116,7 +117,7 @@ export class ResultCard {
   private pillText: TextLabel;
   private pillOn = 0;
 
-  constructor(world: World, parent: Entity, private onAction: (a: ResultAction) => void) {
+  constructor(private world: World, parent: Entity, private onAction: (a: ResultAction) => void) {
     this.win = new GlassWindow(world, { name: 'ResultCard', w: W, h: H, px: PX, parent, autoClose: 1e9 });
     const geo = starGeometry(0.0145);
     for (let i = 0; i < 3; i++) {
@@ -176,9 +177,11 @@ export class ResultCard {
       s.scale.setScalar(1);
     }
     this.draw(title, banner || sub, banner !== '', r, best);
+    this.win.root.scale.setScalar(1);
     this.win.root.position.set(0, 0.2, -0.05);
     this.win.root.rotation.set(-0.3, 0, 0);
-    this.win.show();
+    if (viewFov(this.world).mode === 'narrow') this.win.open(0.45, 0.06);
+    else this.win.show();
     this.t = 0;
     this.pullHand = -1;
     this.pullProgress = 0;

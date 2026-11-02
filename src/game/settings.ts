@@ -58,55 +58,55 @@ const STEPS: { key: 'matHeight' | 'matDistance'; label: string }[] = [
 ];
 const AUTO_CLOSE = 25;
 
-const W = 0.34;
-const PX = 1024;
-/** Metres per canvas pixel. */
+const W = 0.4;
+const PX = 1000;
 const M = W / PX;
-const PAD = 44;
-const TOP = 132;
-const ROW_H = 104;
-const GAP = 30;
-const SECTION_W = PX - PAD * 2;
-const PY = TOP + ROWS.length * ROW_H + GAP + STEPS.length * ROW_H + PAD;
-const H = PY * M;
+const PAD = 40;
+const TOP = 138;
+const ROW_H = 75;
+const ROW_STEP = 110;
+const H = 0.52;
+
+interface SettingsActions {
+  sound: () => boolean;
+  toggleSound: () => void;
+  restart: () => void;
+  moveMat: () => void;
+}
 
 /** Settings stay where they opened, just like the menu. */
 export class SettingsPanel {
   private win: GlassWindow;
   private state: SettingsState;
+  private sound: Toggle;
 
   constructor(
     world: World,
     state: SettingsState,
     private onChange: (state: SettingsState) => void,
+    private actions: SettingsActions,
   ) {
     this.state = { ...state };
     this.win = new GlassWindow(world, { name: 'SettingsPanel', w: W, h: H, px: PX, r: 0.03, autoClose: AUTO_CLOSE });
-    this.drawPage();
-    const rowY = (i: number) => TOP + i * ROW_H;
-
+    const rowY = (i: number) => TOP + i * ROW_STEP;
     ROWS.forEach((row, i) => {
       const y = rowY(i);
       const [, ly] = this.win.toLocal(0, y + ROW_H / 2);
       const toggle = new Toggle(this.state[row.key], 0.019);
-      toggle.root.position.set(W / 2 - PAD * M - 0.018 - 0.0155, ly, 0.0015);
+      toggle.root.position.set(0.154, ly, 0.0015);
       this.win.content.add(toggle.root);
       this.win.addTick(toggle);
-      this.win.addHit(PAD, y, SECTION_W, ROW_H, 8, () => {
+      this.win.addHit(PAD, y, PX - PAD * 2, ROW_H, 8, () => {
         this.state[row.key] = !this.state[row.key];
         toggle.on = this.state[row.key];
         sfx.click();
         this.onChange({ ...this.state });
       }, `Settings_${row.key}`);
     });
-
-    // Two steppers for where the mat sits: lower/higher, nearer/farther.
     STEPS.forEach((row, j) => {
-      const y = rowY(ROWS.length + j) + GAP;
-      const [, ly] = this.win.toLocal(0, y + ROW_H / 2);
-      const right = W / 2 - PAD * M - 0.018;
-      const value = new TextLabel(0.0155, 56, 500, INK.secondary);
-      value.mesh.position.set(right - 0.092, ly, 0.0015);
+      const [, ly] = this.win.toLocal(0, rowY(ROWS.length + j) + ROW_H / 2);
+      const value = new TextLabel(0.018, 56, 500, INK.secondary);
+      value.mesh.position.set(0.07, ly, 0.0015);
       this.win.content.add(value.mesh);
       const text = () => {
         const cm = this.state[row.key] * MAT_STEP[row.key];
@@ -121,27 +121,44 @@ export class SettingsPanel {
         sfx.click();
         this.onChange({ ...this.state });
       };
-      const minus = new Button('minus', () => nudge(-1), '', { r: 0.0155 });
-      const plus = new Button('plus', () => nudge(1), '', { r: 0.0155 });
+      const minus = new Button('minus', () => nudge(-1), '', { r: 0.012 });
+      const plus = new Button('plus', () => nudge(1), '', { r: 0.012 });
       minus.root.name = `Settings_${row.key}_minus`;
       plus.root.name = `Settings_${row.key}_plus`;
-      minus.root.position.set(right - 0.0155 - 0.038, ly, 0.0025);
-      plus.root.position.set(right - 0.0155 + 0.002, ly, 0.0025);
+      minus.root.position.set(0.124, ly, 0.0025);
+      plus.root.position.set(0.166, ly, 0.0025);
       for (const b of [minus, plus]) {
         b.root.rotation.x = Math.PI / 2;
         this.win.addControl(b.root, b);
       }
     });
-
+    const [, sy] = this.win.toLocal(0, rowY(7) + ROW_H / 2);
+    this.sound = new Toggle(actions.sound(), 0.019);
+    this.sound.root.position.set(0.154, sy, 0.0015);
+    this.win.content.add(this.sound.root);
+    this.win.addTick(this.sound);
+    this.win.addHit(PAD, rowY(7), PX - PAD * 2, ROW_H, 8, () => {
+      actions.toggleSound();
+      this.sound.on = actions.sound();
+      sfx.click();
+    }, 'Settings_sound');
+    [actions.restart, actions.moveMat].forEach((run, i) => {
+      this.win.addHit(PAD, rowY(8 + i), PX - PAD * 2, ROW_H, 8, () => {
+        sfx.click();
+        this.close();
+        run();
+      }, i === 0 ? 'Settings_restart' : 'Settings_recenter');
+    });
     const close = new Button('close', () => {
       if (!this.win.ready) return;
       sfx.click();
       this.close();
     }, '', { r: 0.015 });
     close.root.name = 'Settings_close';
-    close.root.position.set(0, -H / 2 - 0.024, 0.006);
+    close.root.position.set(0, -H / 2 - 0.03, 0.006);
     close.root.rotation.x = Math.PI / 2;
     this.win.addControl(close.root, close);
+    this.drawPage();
   }
 
   private drawPage() {
@@ -150,36 +167,22 @@ export class SettingsPanel {
     g.textAlign = 'left';
     g.fillStyle = INK.primary;
     setFont(g, 40, 400, 2, DISPLAY);
-    g.fillText('SETTINGS', PAD + 8, 76);
-
-    const section = (y: number, rows: number) => {
+    g.fillText('SETTINGS', PAD + 20, 76);
+    const labels = [...ROWS.map((row) => row.label), ...STEPS.map((row) => row.label), 'Sound on / off', 'Restart this sheet', 'Move mat here'];
+    labels.forEach((label, i) => {
+      const y = TOP + i * ROW_STEP;
       g.fillStyle = INK.section;
       g.beginPath();
-      g.roundRect(PAD, y, SECTION_W, rows * ROW_H, 8);
+      g.roundRect(PAD, y, PX - PAD * 2, ROW_H, 8);
       g.fill();
-      g.strokeStyle = 'rgba(120,220,255,0.28)';
-      g.lineWidth = 1.5;
-      g.stroke();
-      g.fillStyle = 'rgba(255,255,255,0.09)';
-      for (let i = 1; i < rows; i++) g.fillRect(PAD + 32, y + i * ROW_H - 1, SECTION_W - 32, 2);
-    };
-    section(TOP, ROWS.length);
-    section(TOP + ROWS.length * ROW_H + GAP, STEPS.length);
-
-    ROWS.forEach((row, i) => {
-      const y = TOP + i * ROW_H;
       g.fillStyle = INK.primary;
-      setFont(g, 31, 500);
-      g.fillText(row.label.toUpperCase(), PAD + 32, y + ROW_H / 2 - 17);
-      g.fillStyle = INK.secondary;
-      setFont(g, 23, 400);
-      g.fillText(row.hint, PAD + 32, y + ROW_H / 2 + 22);
-    });
-    STEPS.forEach((row, j) => {
-      const y = TOP + (ROWS.length + j) * ROW_H + GAP;
-      g.fillStyle = INK.primary;
-      setFont(g, 31, 500);
-      g.fillText(row.label.toUpperCase(), PAD + 32, y + ROW_H / 2);
+      setFont(g, 29, 500);
+      g.fillText(label.toUpperCase(), PAD + 20, y + ROW_H / 2 - (i < ROWS.length ? 18 : 0));
+      if (i < ROWS.length) {
+        g.fillStyle = INK.secondary;
+        setFont(g, 28, 400);
+        g.fillText(ROWS[i].hint, PAD + 20, y + ROW_H / 2 + 18);
+      }
     });
     this.win.commit();
   }
@@ -189,7 +192,8 @@ export class SettingsPanel {
   }
 
   open() {
-    this.win.open(0.46, 0.1);
+    this.sound.on = this.actions.sound();
+    this.win.open(0.53, 0.1);
     sfx.pick();
   }
 

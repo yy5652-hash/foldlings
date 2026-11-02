@@ -3,6 +3,7 @@
  * rays, gaze or a mouse becomes a crease, a swinging flap, and a fold.
  */
 
+import { viewFov } from './view-fov.js';
 import {
   Entity,
   Group,
@@ -106,7 +107,7 @@ export interface FoldGameEvents {
 
 /** The capsules beside the mat: size, then where they float and how they tilt. */
 const CAPSULE_W = 0.058;
-const CAPSULE_H = 0.156;
+const CAPSULE_H = 0.234;
 const CAPSULE_X = 0.3;
 const CAPSULE_Y = 0.052;
 const CAPSULE_Z = 0.06;
@@ -122,6 +123,8 @@ export class FoldGame {
   private capsules: { root: Group; entity: Entity }[] = [];
   private easyFolds = false;
   private reduceMotion = false;
+  private leftHanded = false;
+  private narrow = false;
 
   levelIndex = 0;
   level: Level = LEVELS[0];
@@ -203,14 +206,11 @@ export class FoldGame {
     target.addEventListener('pointerup', (e) => this.onRayUp(e));
     target.addEventListener('pointercancel', (e) => this.onRayUp(e));
 
-    // Two glass capsules float beside the mat, tilted to the player. The most
-    // used pair sits on the working hand's side; everything else lives in the
-    // menu (palm-up or the menu button).
-    this.capsules = [this.addCapsule(1), this.addCapsule(-1)];
-    this.addButton('hint', this.capsules[0], 0.031, () => this.hint(), 'Hint');
-    this.addButton('undo', this.capsules[0], -0.039, () => this.undo(), 'Undo');
-    this.addButton('levels', this.capsules[1], 0.031, () => this.events.onLevels?.(), 'Levels');
-    this.addButton('menu', this.capsules[1], -0.039, () => this.events.onMenu?.(), 'Menu');
+    // The working hand's capsule keeps the play view clear.
+    this.capsules = [this.addCapsule(1)];
+    this.addButton('hint', this.capsules[0], 0.072, () => this.hint(), 'Hint');
+    this.addButton('undo', this.capsules[0], 0, () => this.undo(), 'Undo');
+    this.addButton('menu', this.capsules[0], -0.072, () => this.events.onMenu?.(), 'Menu');
     for (const c of this.capsules) floatOverRoom(c.root);
 
     const ring = new RingGeometry(0.008, 0.011, 32);
@@ -228,6 +228,9 @@ export class FoldGame {
 
     world.renderer.xr.addEventListener('sessionstart', () => this.onSessionStart());
     world.renderer.xr.addEventListener('sessionend', () => {
+      this.narrow = false;
+      this.setLeftHanded(this.leftHanded);
+      this.board.setNarrow(false);
       for (const c of this.cursors) c.visible = false;
       if (this.drag?.source?.hand) this.endDrag(true);
       this.handGrace.reset();
@@ -235,7 +238,14 @@ export class FoldGame {
       this.handsTracked = false;
       this.pinchingHands.clear();
     });
+    const fov = viewFov(world);
     world.onXRFrame((frame) => {
+      const narrow = fov.mode === 'narrow';
+      if (narrow !== this.narrow) {
+        this.narrow = narrow;
+        this.setLeftHanded(this.leftHanded);
+        this.board.setNarrow(narrow);
+      }
       if (this.inputReady) this.onXRFrame(frame);
     });
   }
@@ -250,7 +260,7 @@ export class FoldGame {
 
   setLeftHanded(on: boolean) {
     this.placeCapsule(this.capsules[0], on ? -1 : 1);
-    this.placeCapsule(this.capsules[1], on ? 1 : -1);
+    this.leftHanded = on;
   }
 
   setReduceMotion(on: boolean) {
@@ -264,7 +274,7 @@ export class FoldGame {
   }
 
   private placeCapsule(c: { root: Group }, side: number) {
-    c.root.position.set(side * CAPSULE_X, CAPSULE_Y, CAPSULE_Z);
+    c.root.position.set(side * (this.narrow ? 0.22 : CAPSULE_X), this.narrow ? 0.16 : CAPSULE_Y, this.narrow ? -0.13 : CAPSULE_Z);
     c.root.rotation.set(CAPSULE_TILT, -side * 0.2, 0, 'YXZ');
   }
 
@@ -299,7 +309,7 @@ export class FoldGame {
         action();
       },
       label,
-      { plain: true, r: 0.022, labelSize: 0.0135 },
+      { plain: true, r: 0.022, labelSize: 0.018 },
     );
     b.root.name = `Capsule_${kind}`;
     b.root.position.set(0, y, 0.002);
@@ -1161,6 +1171,7 @@ export class FoldGame {
   /** Clears the mat's controls and hints away for the opening, then fades them back. */
   setStage(on: boolean) {
     this.stageOn = on;
+    this.board.setDecorationStrength(on ? 0.4 : 1);
     if (!on) this.guide.hide();
     this.board.setHintsVisible(on);
   }

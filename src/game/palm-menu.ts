@@ -17,9 +17,9 @@ export interface MenuItem {
   run: () => void;
 }
 
-/** A honeycomb, as on the visionOS home view: 4 over 3. */
+/** Four destinations in one row. */
 const ROW_LEN = 4;
-const CELL_X = 0.086;
+const CELL_X = 0.096;
 const CELL_Y = 0.092;
 const R = 0.03;
 const UP = new Vector3(0, 1, 0);
@@ -113,7 +113,7 @@ export class PalmMenu {
 
   /** Opens at chest height and a forearm away, above the mat where hands work. */
   open() {
-    this.win.open(0.45, 0.1);
+    this.win.open(0.45, 0.06);
     this.openedAt = this.clock;
     sfx.pick();
   }

@@ -152,6 +152,7 @@ export class BoardView {
   private ringGeo = new RingGeometry(0.003, 0.0044, 24);
   private warm = false;
   private matMesh!: Mesh;
+  private decoration = new MeshBasicMaterial({ transparent: true, opacity: 0.4, depthWrite: false, toneMapped: false });
   private catcher!: Mesh;
   private highContrast = false;
   private goalFacets: readonly Facet[] = [];
@@ -214,6 +215,11 @@ export class BoardView {
         m.stroke();
       }
     }
+    const [decorationCanvas, decorationTex] = canvasTexture(2048, 2048);
+    const decorationContext = decorationCanvas.getContext('2d')!;
+    // Preserve the plate and lattice independently of the engraving.
+    const plate = m.getImageData(0, 0, 2048, 2048);
+    m.clearRect(0, 0, 2048, 2048);
     // Rulers down the long edges, in real centimetres.
     m.fillStyle = 'rgba(150,230,255,0.75)';
     setFont(m, 22, 500, 1, MONO);
@@ -235,6 +241,10 @@ export class BoardView {
     m.fillStyle = 'rgba(150,230,255,0.6)';
     setFont(m, 20, 400, 6, MONO);
     m.fillText('FOLD ARRAY', 1024, 1984);
+    decorationContext.drawImage(matCanvas, 0, 0);
+    m.clearRect(0, 0, 2048, 2048);
+    m.putImageData(plate, 0, 0);
+    this.decoration.map = decorationTex;
     const matGeo = new ShapeGeometry(roundedRect(MAT_W, MAT_D, 0.025));
     const uv = matGeo.attributes.uv;
     const pos = matGeo.attributes.position;
@@ -246,6 +256,11 @@ export class BoardView {
     mat.name = 'Mat';
     this.root.add(mat);
     this.matMesh = mat;
+    const engraving = new Mesh(matGeo, this.decoration);
+    engraving.name = 'MatEngraving';
+    engraving.rotation.x = -Math.PI / 2;
+    engraving.position.y = 0.0001;
+    this.root.add(engraving);
 
     // In passthrough, a shadow-only sheet around the mat lets the paper and
     // the creatures cast soft shadows onto the real table.
@@ -397,6 +412,15 @@ export class BoardView {
     const dy = line.nx;
     const sign = dy < 0 ? 1 : -1;
     m.position.set(x + dx * sign * 0.16, 0.014, -(y + dy * sign * 0.16));
+  }
+
+  setDecorationStrength(strength: number) {
+    this.decoration.opacity = strength;
+  }
+
+  setNarrow(on: boolean) {
+    this.card.position.set(on ? -0.14 : -0.205, on ? 0.015 : 0.03, on ? -0.09 : -0.185);
+    this.card.rotation.set(-0.42, on ? 0.15 : 0.3, 0);
   }
 
   /** Hides the crease, hint and goal marks during the opening. */
@@ -578,15 +602,15 @@ export class BoardView {
     c.textAlign = 'center';
     c.textBaseline = 'middle';
     c.fillStyle = INK.primary;
-    setFont(c, 34, 400, 1, DISPLAY);
+    setFont(c, 49, 400, 1, DISPLAY);
     c.fillText(title.toUpperCase(), 256, 508, 460);
     c.fillStyle = INK.secondary;
-    setFont(c, 28, 500, 0.5, MONO);
+    setFont(c, 49, 500, 0.5, MONO);
     c.fillText(subtitle.toUpperCase(), 256, 556, 460);
     if (footer) {
       // Collection line, e.g. "Zoo 7 · 3-day streak".
       c.fillStyle = INK.tertiary;
-      setFont(c, 22, 500, 0.5, MONO);
+      setFont(c, 49, 500, 0.5, MONO);
       c.fillText(footer.toUpperCase(), 256, 598, 460);
     }
     this.cardTex.needsUpdate = true;

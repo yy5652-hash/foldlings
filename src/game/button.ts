@@ -93,7 +93,7 @@ export class Button {
     this.root.name = `Button_${kind}`;
     this.r = opts.r ?? RADIUS;
     this.plain = !!opts.plain;
-    this.labelSize = opts.labelSize ?? 0.0145;
+    this.labelSize = Math.max(opts.labelSize ?? 0.018, 0.018);
     this.iconColor = opts.prominent ? '#04161f' : INK.primary;
     const d = this.r * 2;
     const glass = this.plain
