@@ -403,6 +403,8 @@ export class GameSystem extends createSystem({
         fov: () => viewFov(this.world),
         forceFov: (left = 37, right = 37, up = 25, down = 43) => viewFov(this.world).force({ left, right, up, down }),
         game: this.game,
+        heldError: () => this.game.heldError(),
+        foldPose: () => this.game.foldPose(),
         zoo: this.zoo,
         world: this.world,
         recenter: () => this.place(true),

@@ -17,7 +17,9 @@ import {
   Vector3,
   World,
 } from '@iwsdk/core';
-import { rawCrease, snapCrease, Snap, Point3 } from '../fold/creases.js';
+import { bendPoint, BendPose, interpolateBend, solveBend, solveHeldBend } from '../fold/bend.js';
+import { OneEuro } from './one-euro.js';
+import { prepareSnaps, rawCrease, snapCrease, Snap, Point3 } from '../fold/creases.js';
 import {
   applyAffine,
   Line,
@@ -56,7 +58,7 @@ import { HandGrace, HandsMissing } from './hand-grace.js';
 import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
 import { PaperTextures } from './paper-texture.js';
-import { PaperView } from './paper-view.js';
+import { BASE_HEIGHT, LAYER_GAP, PaperView, stackHeights } from './paper-view.js';
 import { sfx, unlockAudio } from './sfx.js';
 
 type DragKind = 'near' | 'ray';
@@ -67,7 +69,12 @@ interface Drag {
   pointerId: number;
   p: V2;
   hand: Point3;
+  offset: Point3;
+  filtered: Point3;
+  travel: number;
+  heldHeight: number;
   snap: Snap | null;
+  candidates: Snap[];
   angle: number;
   startedAt: number;
   /** The fold under the hand would solve the puzzle. */
@@ -78,9 +85,12 @@ interface Drag {
 }
 
 interface Settle {
-  snap: Snap;
-  from: number;
-  to: number;
+  p: V2;
+  heldHeight: number;
+  snap: Snap | null;
+  from: BendPose;
+  to: BendPose;
+  commit: boolean;
   t: number;
   dur: number;
   unfolds: boolean;
@@ -174,6 +184,19 @@ export class FoldGame {
   private handsTracked = false;
   private pinchingHands = new Set<XRInputSource>();
   private settle: Settle | null = null;
+  private bend: BendPose = { nx: 1, ny: 0, d: 0, theta: 0, radius: 0, residual: 0 };
+  private bendNormal = { x: 1, y: 0 };
+  private hasBendNormal = false;
+  private handTarget: Point3 = { x: 0, y: 0, h: 0 };
+  private heldPoint = { x: 0, y: 0, h: 0, nx: 0, ny: 0, nh: 1 };
+  private filterX = new OneEuro();
+  private filterY = new OneEuro();
+  private filterH = new OneEuro();
+  private rawLine: Line = { nx: 1, ny: 0, d: 0 };
+  private solverGrab = new Vector3();
+  private solverHand = new Vector3();
+  private solverEnds: [Vector3, Vector3] = [new Vector3(), new Vector3()];
+  private targetLine: Line = { nx: 1, ny: 0, d: 0 };
   private glow = 0;
   private time = 0;
 
@@ -401,7 +424,7 @@ export class FoldGame {
       case 1:
         return 'Match the shape on the card';
       case 2:
-        return 'Folds snap to the dots';
+        return 'Release to lock a fold to the dots';
       default:
         return '';
     }
@@ -758,13 +781,28 @@ export class FoldGame {
     if (source?.hand) this.handGrace.begin();
     this.guide.hide();
     this.idle = 0;
+    this.paperView.beginBend(this.paper, null);
+    const facet = topFacetAt(this.paper, p);
+    const heights = stackHeights(this.paper.facets);
+    const heldHeight = BASE_HEIGHT + (facet ? heights[this.paper.facets.indexOf(facet)] : 0) * LAYER_GAP;
+    this.filterX.reset(hand.x);
+    this.filterY.reset(hand.y);
+    this.filterH.reset(hand.h);
+    this.hasBendNormal = false;
+    this.bend.theta = this.bend.radius = this.bend.residual = 0;
+    this.paperView.setBend(this.bend);
     this.drag = {
       kind,
       source,
       pointerId,
       p: { x: p.x, y: p.y },
       hand: { ...hand },
+      offset: kind === 'near' ? { x: hand.x - p.x, y: hand.y - p.y, h: hand.h - heldHeight } : { x: 0, y: 0, h: 0 },
+      filtered: { ...hand },
+      travel: 0,
+      heldHeight,
       snap: null,
+      candidates: prepareSnaps(this.paper, p),
       angle: 0,
       startedAt: this.time,
       solves: false,
@@ -789,16 +827,21 @@ export class FoldGame {
     }
     this.board.showCrease(null);
     this.board.setMeasure(null, 0, 0, false);
-    if (!d || !d.snap) {
-      this.paperView.setPaper(this.paper);
-      if (d && cancel) sfx.cancel();
-      return;
+    if (!d) return;
+    const commit = !cancel && !!d.snap && d.angle > Math.PI / 2;
+    const to = { ...this.bend, theta: commit ? Math.PI : 0, radius: 0, residual: 0 };
+    if (commit && d.snap) {
+      to.nx = d.snap.s * d.snap.line.nx;
+      to.ny = d.snap.s * d.snap.line.ny;
+      to.d = d.snap.s * d.snap.line.d;
     }
-    const commit = !cancel && d.angle > Math.PI / 2;
     this.settle = {
+      p: d.p,
+      heldHeight: d.heldHeight,
       snap: d.snap,
-      from: d.angle,
-      to: commit ? Math.PI : 0,
+      from: { ...this.bend },
+      to,
+      commit,
       t: 0,
       unfolds: d.unfolds,
       dur: commit ? 0.16 + 0.12 * (1 - d.angle / Math.PI) : 0.2,
@@ -966,21 +1009,23 @@ export class FoldGame {
     this.messageTimer = seconds;
   }
 
-  private boardPoint(x: number, y: number, h: number): Vector3 {
-    return this.boardRoot.localToWorld(new Vector3(x, h, -y));
+  private boardPoint(x: number, y: number, h: number, out: Vector3): Vector3 {
+    return this.boardRoot.localToWorld(out.set(x, h, -y));
   }
 
   /** Feeds the X-ray view with the live crease computation. */
   private showSolver(d: Drag, raw: Line | null) {
-    const p = this.boardPoint(d.p.x, d.p.y, 0.003);
-    const h = this.boardPoint(d.hand.x, d.hand.y, Math.max(0, d.hand.h));
+    const p = this.boardPoint(d.p.x, d.p.y, 0.003, this.solverGrab);
+    const h = this.boardPoint(this.handTarget.x, this.handTarget.y, Math.max(0, this.handTarget.h), this.solverHand);
     let ends: [Vector3, Vector3] | null = null;
     if (raw) {
       const fx = raw.nx * raw.d;
       const fy = raw.ny * raw.d;
       const tx = -raw.ny * 0.24;
       const ty = raw.nx * 0.24;
-      ends = [this.boardPoint(fx - tx, fy - ty, 0.006), this.boardPoint(fx + tx, fy + ty, 0.006)];
+      this.boardPoint(fx - tx, fy - ty, 0.006, this.solverEnds[0]);
+      this.boardPoint(fx + tx, fy + ty, 0.006, this.solverEnds[1]);
+      ends = this.solverEnds;
     }
     this.xray.showSolver(p, h, ends);
   }
@@ -1013,8 +1058,20 @@ export class FoldGame {
 
   private updateDrag(dt: number, immediate = false) {
     const d = this.drag!;
-    const raw = rawCrease(d.p, d.hand);
-    let snap = raw ? snapCrease(raw, d.p, this.paper, d.snap, this.easyFolds ? 0.09 : 0.05) : null;
+    const filter = d.kind === 'near' && !!d.source?.hand;
+    const step = immediate ? 1 / 72 : dt;
+    const x = filter ? this.filterX.filter(d.hand.x, step) : d.hand.x;
+    const y = filter ? this.filterY.filter(d.hand.y, step) : d.hand.y;
+    const h = filter ? this.filterH.filter(d.hand.h, step) : d.hand.h;
+    d.travel += Math.hypot(x - d.filtered.x, y - d.filtered.y, h - d.filtered.h);
+    d.filtered.x = x; d.filtered.y = y; d.filtered.h = h;
+    const offset = Math.max(0, 1 - d.travel / 0.04);
+    const hand = this.handTarget;
+    hand.x = x - d.offset.x * offset;
+    hand.y = y - d.offset.y * offset;
+    hand.h = h - d.offset.h * offset;
+    const raw = rawCrease(d.p, hand, this.rawLine);
+    let snap = raw ? snapCrease(raw, d.p, this.paper, d.snap, this.easyFolds ? 0.09 : 0.05, d.candidates) : null;
     let unfolds = false;
     const back = this.reverse;
     if (raw && back) {
@@ -1036,11 +1093,14 @@ export class FoldGame {
       (snap === null) !== (d.snap === null) ||
       (snap && d.snap && (snap.f !== d.snap.f || snap.k !== d.snap.k || snap.s !== d.snap.s));
     if (changed) {
+      if (unfolds !== d.unfolds) this.paperView.beginBend(this.paper, unfolds && back ? back.move : null);
       d.snap = snap;
       d.unfolds = unfolds;
       if (snap) {
-        const parts = unfolds && back ? back : splitPaper(this.paper, snap.line, snap.s)!;
-        this.paperView.setSplit(parts.stay, parts.move, snap.line, snap.s);
+        this.targetLine.nx = snap.s * snap.line.nx;
+        this.targetLine.ny = snap.s * snap.line.ny;
+        this.targetLine.d = snap.s * snap.line.d;
+        this.paperView.setLanding(unfolds && back ? back.move : null, this.targetLine);
         const result = unfolds && back ? back.result : foldPaper(this.paper, snap.line, snap.s);
         const solves = !this.isFree && !!result && bestMatch(rasterize(result), this.targets) >= 0.999;
         if (solves && !d.solves) sfx.warm();
@@ -1048,36 +1108,67 @@ export class FoldGame {
         d.solves = solves;
       } else {
         d.solves = false;
-        this.paperView.setPaper(this.paper);
+        this.paperView.setLanding(null, null);
       }
     }
+    if (unfolds && back) {
+      this.bend.nx = back.s * back.line.nx;
+      this.bend.ny = back.s * back.line.ny;
+      this.bend.d = back.s * back.line.d;
+      this.bend.radius = 0.001;
+      this.bend.theta = Math.atan2(Math.max(0, hand.h), back.s * lineSide(back.line, hand));
+    } else {
+      const previous = this.hasBendNormal ? this.bendNormal : null;
+      if (d.kind === 'near') solveHeldBend(d.p, hand, this.paper, previous, d.heldHeight, this.paperView.hingeY, this.bend, this.heldPoint);
+      else solveBend(d.p, hand, this.paper, previous, this.bend);
+      this.bendNormal.x = -this.bend.nx;
+      this.bendNormal.y = -this.bend.ny;
+      this.hasBendNormal = true;
+    }
+    bendPoint(d.p.x, d.p.y, d.heldHeight, this.bend, this.paperView.hingeY, this.heldPoint);
+    this.bend.residual = Math.hypot(this.heldPoint.x - hand.x, this.heldPoint.y - hand.y, this.heldPoint.h - hand.h);
+    this.paperView.setBend(this.bend);
     if (!d.snap) {
+      d.angle = 0;
       this.board.showCrease(null);
       this.board.setMeasure(null, 0, 0, false);
       return;
     }
-    // Angle that swings the grabbed point towards the hand around the crease.
-    const across = d.snap.s * lineSide(d.snap.line, d.hand);
-    const target = Math.atan2(Math.max(0, d.hand.h), across);
-    const k = immediate ? 1 : 1 - Math.exp(-dt * 22);
-    d.angle += (target - d.angle) * k;
-    this.paperView.setFlapAngle(d.angle);
+    const across = d.snap.s * lineSide(d.snap.line, hand);
+    d.angle = Math.atan2(Math.max(0, hand.h), across);
     this.board.showCrease(d.snap.line, d.angle > Math.PI / 2, d.solves);
-    this.board.setMeasure(this.hintsOff ? null : d.snap.line, this.folds + 1, this.level.par, d.solves, d.unfolds);
+    const side = lineSide(this.bend, d.p);
+    const fx = d.p.x - this.bend.nx * side;
+    const fy = d.p.y - this.bend.ny * side;
+    const distance = Math.abs(d.snap.line.nx * fx + d.snap.line.ny * fy - d.snap.line.d);
+    this.board.setMeasure(this.hintsOff ? null : d.snap.line, this.folds + 1, this.level.par, d.solves, d.unfolds, distance);
   }
 
   private updateSettle(dt: number) {
     const s = this.settle!;
     s.t = Math.min(1, s.t + dt / s.dur);
     const e = s.t * s.t * (3 - 2 * s.t);
-    this.paperView.setFlapAngle(s.from + (s.to - s.from) * e);
+    interpolateBend(s.from, s.to, e, this.bend);
+    bendPoint(s.p.x, s.p.y, s.heldHeight, this.bend, this.paperView.hingeY, this.heldPoint);
+    this.bend.residual = Math.hypot(this.heldPoint.x - this.handTarget.x, this.heldPoint.y - this.handTarget.y, this.heldPoint.h - this.handTarget.h);
+    this.paperView.setBend(this.bend);
     if (s.t < 1) return;
     this.settle = null;
-    if (s.to === 0) {
-      this.paperView.setPaper(this.paper);
+    if (!s.commit || !s.snap) {
+      this.paperView.endBend();
       return;
     }
     this.commitFold(s.snap, false, s.unfolds);
+  }
+
+  heldError(): number {
+    return this.drag || this.settle ? this.bend.residual : 0;
+  }
+
+  foldPose() {
+    if (!this.drag && !this.settle) return null;
+    const { theta, radius, nx, ny, d } = this.bend;
+    return { theta, radius, nx, ny, d };
   }
 
   private commitFold(snap: Snap, silent = false, unfolds = false) {
@@ -1148,11 +1239,16 @@ export class FoldGame {
     this.paused = true;
     if (this.drag?.kind === 'ray') this.board.hitPlane.releasePointerCapture?.(this.drag.pointerId);
     if (this.drag) this.endDrag(true);
-    // Drop an unfinished settle; committed folds already live in history.
-    this.settle = null;
+    // Cancel an unfinished settle continuously; committed folds already live in history.
+    if (this.settle?.commit) {
+      this.settle.from = { ...this.bend };
+      this.settle.to = { ...this.bend, theta: 0, radius: 0 };
+      this.settle.commit = false;
+      this.settle.t = 0;
+      this.settle.dur = 0.2;
+    }
     this.handGrace.reset();
     this.pinchingHands.clear();
-    this.paperView.setPaper(this.paper);
     this.board.showCrease(null);
     this.board.setMeasure(null, 0, 0, false);
     for (const cursor of this.cursors) cursor.visible = false;

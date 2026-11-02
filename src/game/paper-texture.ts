@@ -16,7 +16,9 @@ export interface PaperLook {
   back: string;
 }
 
-const SIZE = 512;
+const SIZE = 1024;
+const SCALE = SIZE / 512;
+const DRAW_SIZE = SIZE / SCALE;
 
 function rng(seed: number): () => number {
   let s = seed >>> 0 || 1;
@@ -34,8 +36,8 @@ function fibres(ctx: CanvasRenderingContext2D, seed: number, dark: boolean) {
   ctx.globalAlpha = 0.07;
   ctx.strokeStyle = dark ? '#000' : '#fff';
   for (let i = 0; i < 260; i++) {
-    const x = r() * SIZE;
-    const y = r() * SIZE;
+    const x = r() * DRAW_SIZE;
+    const y = r() * DRAW_SIZE;
     const a = r() * Math.PI;
     const l = 6 + r() * 22;
     ctx.lineWidth = 0.6 + r() * 0.9;
@@ -62,10 +64,10 @@ function motif(ctx: CanvasRenderingContext2D, m: Motif, ink: string) {
       // Seigaiha: overlapping arcs.
       ctx.lineWidth = 2.2;
       const r = 32;
-      for (let row = -1; row < SIZE / (r / 2) + 2; row++) {
+      for (let row = -1; row < DRAW_SIZE / (r / 2) + 2; row++) {
         const y = row * (r / 2);
         const off = row % 2 === 0 ? 0 : r;
-        for (let x = -r + off; x < SIZE + r; x += r * 2) {
+        for (let x = -r + off; x < DRAW_SIZE + r; x += r * 2) {
           for (const k of [1, 0.72, 0.44]) {
             ctx.beginPath();
             ctx.arc(x, y + r, r * k, Math.PI, 2 * Math.PI);
@@ -76,8 +78,8 @@ function motif(ctx: CanvasRenderingContext2D, m: Motif, ink: string) {
       break;
     }
     case 'dots': {
-      for (let y = 16; y < SIZE; y += 32) {
-        for (let x = (y / 32) % 2 ? 32 : 16; x < SIZE; x += 32) {
+      for (let y = 16; y < DRAW_SIZE; y += 32) {
+        for (let x = (y / 32) % 2 ? 32 : 16; x < DRAW_SIZE; x += 32) {
           ctx.beginPath();
           ctx.arc(x, y, 4.5, 0, Math.PI * 2);
           ctx.fill();
@@ -87,18 +89,18 @@ function motif(ctx: CanvasRenderingContext2D, m: Motif, ink: string) {
     }
     case 'stripes': {
       ctx.lineWidth = 7;
-      for (let k = -SIZE; k < SIZE * 2; k += 28) {
+      for (let k = -DRAW_SIZE; k < DRAW_SIZE * 2; k += 28) {
         ctx.beginPath();
         ctx.moveTo(k, 0);
-        ctx.lineTo(k + SIZE, SIZE);
+        ctx.lineTo(k + DRAW_SIZE, DRAW_SIZE);
         ctx.stroke();
       }
       break;
     }
     case 'checks': {
       ctx.globalAlpha = 0.16;
-      for (let y = 0; y < SIZE; y += 32) {
-        for (let x = (y / 32) % 2 ? 32 : 0; x < SIZE; x += 64) {
+      for (let y = 0; y < DRAW_SIZE; y += 32) {
+        for (let x = (y / 32) % 2 ? 32 : 0; x < DRAW_SIZE; x += 64) {
           ctx.fillRect(x, y, 32, 32);
         }
       }
@@ -113,8 +115,8 @@ function motif(ctx: CanvasRenderingContext2D, m: Motif, ink: string) {
 /** Converts sheet coordinates (metres, centred) to canvas pixels. */
 function toPx(p: V2): [number, number] {
   return [
-    (p.x / PAPER_SIZE + 0.5) * SIZE,
-    (0.5 - p.y / PAPER_SIZE) * SIZE,
+    (p.x / PAPER_SIZE + 0.5) * DRAW_SIZE,
+    (0.5 - p.y / PAPER_SIZE) * DRAW_SIZE,
   ];
 }
 
@@ -138,7 +140,7 @@ export class PaperTextures {
     this.back = new CanvasTexture(this.backCanvas);
     for (const t of [this.front, this.back]) {
       t.colorSpace = SRGBColorSpace;
-      t.anisotropy = 4;
+      t.anisotropy = 8;
     }
     this.redraw([]);
   }
@@ -158,32 +160,34 @@ export class PaperTextures {
   redraw(creases: readonly [V2, V2][]) {
     this.creases = creases;
     const f = this.frontCanvas.getContext('2d')!;
+    f.setTransform(SCALE, 0, 0, SCALE, 0, 0);
     f.fillStyle = this.look.front;
-    f.fillRect(0, 0, SIZE, SIZE);
+    f.fillRect(0, 0, DRAW_SIZE, DRAW_SIZE);
     motif(f, this.look.motif, this.look.ink);
     fibres(f, this.seed, true);
     // A thin border reads as the paper's cut edge.
     f.strokeStyle = 'rgba(255,255,255,0.35)';
     f.lineWidth = 4;
-    f.strokeRect(2, 2, SIZE - 4, SIZE - 4);
+    f.strokeRect(2, 2, DRAW_SIZE - 4, DRAW_SIZE - 4);
 
     const b = this.backCanvas.getContext('2d')!;
+    b.setTransform(SCALE, 0, 0, SCALE, 0, 0);
     b.fillStyle = this.look.back;
-    b.fillRect(0, 0, SIZE, SIZE);
+    b.fillRect(0, 0, DRAW_SIZE, DRAW_SIZE);
     fibres(b, this.seed * 7 + 3, true);
     if (this.highContrast) {
       b.strokeStyle = '#3b3027';
       b.lineWidth = 5;
-      for (let x = 0; x < SIZE * 2; x += 24) {
+      for (let x = 0; x < DRAW_SIZE * 2; x += 24) {
         b.beginPath();
         b.moveTo(x, 0);
-        b.lineTo(x - SIZE, SIZE);
+        b.lineTo(x - DRAW_SIZE, DRAW_SIZE);
         b.stroke();
       }
     }
     b.strokeStyle = 'rgba(0,0,0,0.05)';
     b.lineWidth = 4;
-    b.strokeRect(2, 2, SIZE - 4, SIZE - 4);
+    b.strokeRect(2, 2, DRAW_SIZE - 4, DRAW_SIZE - 4);
 
     for (const ctx of [f, b]) {
       for (const [p, q] of creases) {

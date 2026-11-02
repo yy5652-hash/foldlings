@@ -395,14 +395,14 @@ export class BoardView {
   /** A live reading beside the crease being made. */
   private measure = new TextLabel(0.015, 56, 500, 'rgba(255,190,150,1)', LAYER.overlay, MONO);
 
-  setMeasure(line: Line | null, fold: number, par: number, solves: boolean, unfolds = false) {
+  setMeasure(line: Line | null, fold: number, par: number, solves: boolean, unfolds = false, distance = 0) {
     const m = this.measure.mesh;
     m.visible = !!line;
     if (!line) return;
     // Direction of the crease in degrees, 0 to 180.
     const a = ((Math.atan2(line.ny, line.nx) * 180) / Math.PI + 90 + 360) % 180;
     this.measure.set(
-      unfolds ? 'UNFOLD' : `CREASE ${a.toFixed(1).padStart(5, '0')}  FOLD ${fold}/${par}${solves ? '  MATCH' : ''}`,
+      (unfolds ? 'UNFOLD' : `CREASE ${a.toFixed(1).padStart(5, '0')}  FOLD ${fold}/${par}${solves ? '  MATCH' : ''}`) + ` D ${(distance * 1000).toFixed(1)}MM`,
       solves ? 'rgba(130,255,180,1)' : 'rgba(255,190,150,1)',
     );
     const x = line.nx * line.d;

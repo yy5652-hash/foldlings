@@ -5,23 +5,25 @@
 
 import {
   AdditiveBlending,
+  BufferAttribute,
   BufferGeometry,
+  DynamicDrawUsage,
   Color,
   DoubleSide,
   Float32BufferAttribute,
   Group,
   Mesh,
   MeshBasicMaterial,
-  Quaternion,
   ShaderMaterial,
-  Vector3,
 } from '@iwsdk/core';
 import { applyAffine, clipConvex, Line, polygonArea, reflectPoint, V2 } from '../fold/geom.js';
 import { Facet, PAPER_SIZE, PaperState } from '../fold/paper.js';
+import type { BendPose } from '../fold/bend.js';
+import { BendBuffers, createBendBuffers, WallBuffers, writeBentFacet, writeBentWalls } from './paper-bend.js';
 import { holoSheet, holoWall } from './holo.js';
 import type { PaperTextures } from './paper-texture.js';
 
-export const LAYER_GAP = 0.0006;
+export const LAYER_GAP = 0.0003;
 export const BASE_HEIGHT = 0.0012;
 const WALL_HEIGHT = 0.022;
 
@@ -96,8 +98,11 @@ export function facetGeometry(f: Facet, y: number, expand = 0): BufferGeometry {
 export class PaperView {
   readonly root = new Group();
   private stack = new Group();
-  private flapPivot = new Group();
-  private flapInner = new Group();
+  private bendState: PaperState | null = null;
+  private bent: { facet: Facet; buffers: BendBuffers; geometry: BufferGeometry; moving: boolean; wall: boolean }[] = [];
+  private walls: WallBuffers | null = null;
+  private wallGeometryLive: BufferGeometry | null = null;
+  hingeY = BASE_HEIGHT;
   private matFront: ShaderMaterial;
   private matBack: ShaderMaterial;
   /** A slightly larger sheet of light under each facet burns as its outline. */
@@ -121,16 +126,12 @@ export class PaperView {
     side: DoubleSide,
   });
   private wallMat = holoWall();
-  private flapSign: 1 | -1 = 1;
-  private axis = new Vector3();
-  private q = new Quaternion();
 
   constructor(textures: PaperTextures) {
     this.root.name = 'Paper';
     this.matFront = holoSheet(textures.front, textures.back, false);
     this.matBack = holoSheet(textures.front, textures.back, true);
-    this.root.add(this.stack, this.landing, this.flapPivot);
-    this.flapPivot.add(this.flapInner);
+    this.root.add(this.stack, this.landing);
   }
 
   setGlow(v: number) {
@@ -141,53 +142,91 @@ export class PaperView {
   /** Static paper, no flap. */
   setPaper(state: PaperState) {
     this.clearGroup(this.stack);
-    this.clearGroup(this.flapInner);
+    this.bent.length = 0;
+    this.bendState = null;
+    this.walls = null;
+    this.wallGeometryLive = null;
     this.clearGroup(this.landing);
     this.addFacets(this.stack, state.facets, 0);
   }
 
-  /**
-   * Shows the paper split along `line`: `stay` lies flat, `move` hangs on a
-   * hinge so setFlapAngle can swing it over.
-   */
-  setSplit(stay: Facet[], move: Facet[], line: Line, movingSign: 1 | -1) {
-    this.clearGroup(this.stack);
-    this.clearGroup(this.flapInner);
-    const all = [...stay, ...move];
-    const heights = stackHeights(all);
-    let top = 0;
-    for (const h of heights) top = Math.max(top, h);
-    const hingeY = BASE_HEIGHT + (top + 0.5) * LAYER_GAP;
-    this.addFacetsWithHeights(this.stack, stay, heights.slice(0, stay.length), 0);
-    // Hinge sits on the crease line at the top of the stack.
-    const fx = line.nx * line.d;
-    const fy = line.ny * line.d;
-    this.flapPivot.position.set(fx, hingeY, -fy);
-    this.flapInner.position.set(-fx, -hingeY, fy);
-    this.addFacetsWithHeights(
-      this.flapInner,
-      move,
-      heights.slice(stay.length),
-      0,
-      false,
-    );
-    this.clearGroup(this.landing);
-    for (const f of move) {
-      const land = { ...f, poly: f.poly.map((p) => reflectPoint(line, p)) };
-      const m = new Mesh(facetGeometry(land, hingeY + LAYER_GAP * 0.3), this.landMat);
-      m.renderOrder = 40;
-      this.landing.add(m);
+  /** Allocate once per drag; switching to an unfold only changes the moving mask. */
+  beginBend(state: PaperState, moving: Facet[] | null) {
+    if (this.bendState === state) {
+      for (const b of this.bent) b.moving = moving === null || moving.includes(b.facet);
+      return;
     }
-    this.axis.set(-line.ny, 0, -line.nx).normalize();
-    this.flapSign = movingSign;
-    this.setFlapAngle(0);
+    this.clearGroup(this.stack);
+    this.clearGroup(this.landing);
+    this.bent.length = 0;
+    this.bendState = state;
+    const heights = stackHeights(state.facets);
+    let top = 0;
+    let edges = 0;
+    for (const h of heights) top = Math.max(top, h);
+    this.hingeY = BASE_HEIGHT + (top + 0.5) * LAYER_GAP;
+    state.facets.forEach((f, i) => {
+      const y = BASE_HEIGHT + heights[i] * LAYER_GAP;
+      for (let edge = 0; edge < 2; edge++) {
+        const buffers = createBendBuffers(f, y - edge * LAYER_GAP * 0.45, edge * 0.0011);
+        const geometry = new BufferGeometry();
+        geometry.setAttribute('position', new BufferAttribute(buffers.positions, 3).setUsage(DynamicDrawUsage));
+        geometry.setAttribute('normal', new BufferAttribute(buffers.normals, 3).setUsage(DynamicDrawUsage));
+        geometry.setAttribute('uv', new BufferAttribute(buffers.uvs, 2).setUsage(DynamicDrawUsage));
+        geometry.setDrawRange(0, 0);
+        const mesh = new Mesh(geometry, edge ? this.edgeMat : f.flipped ? this.matBack : this.matFront);
+        mesh.renderOrder = (edge ? 1 : 2) + heights[i];
+        mesh.frustumCulled = false;
+        this.stack.add(mesh);
+        this.bent.push({ facet: f, buffers, geometry, moving: moving === null || moving.includes(f), wall: edge === 0 });
+      }
+      edges += f.poly.length;
+    });
+    this.walls = { positions: new Float32Array(edges * 60 * 3), aH: new Float32Array(edges * 60) };
+    const g = new BufferGeometry();
+    g.setAttribute('position', new BufferAttribute(this.walls.positions, 3).setUsage(DynamicDrawUsage));
+    g.setAttribute('aH', new BufferAttribute(this.walls.aH, 1).setUsage(DynamicDrawUsage));
+    g.setDrawRange(0, 0);
+    this.wallGeometryLive = g;
+    const wall = new Mesh(g, this.wallMat);
+    wall.renderOrder = 30;
+    wall.frustumCulled = false;
+    this.stack.add(wall);
   }
 
-  /** 0 = flat where it started, π = folded flat on top. */
-  setFlapAngle(angle: number) {
-    this.q.setFromAxisAngle(this.axis, -this.flapSign * angle);
-    this.flapPivot.quaternion.copy(this.q);
-    this.landMat.opacity = 0.2 * Math.max(0, Math.sin(Math.min(Math.PI, angle)));
+  setBend(pose: BendPose) {
+    if (!this.walls || !this.wallGeometryLive) return;
+    let walls = 0;
+    for (const b of this.bent) {
+      const count = writeBentFacet(b.facet, b.buffers, pose, this.hingeY, b.moving);
+      b.geometry.setDrawRange(0, count);
+      b.geometry.attributes.position.needsUpdate = true;
+      b.geometry.attributes.normal.needsUpdate = true;
+      b.geometry.attributes.uv.needsUpdate = true;
+      if (b.wall) walls += writeBentWalls(b.buffers, pose, this.hingeY, WALL_HEIGHT, this.walls, walls, b.moving);
+    }
+    this.wallGeometryLive.setDrawRange(0, walls);
+    this.wallGeometryLive.attributes.position.needsUpdate = true;
+    this.wallGeometryLive.attributes.aH.needsUpdate = true;
+    this.landMat.opacity = 0.2 * Math.max(0, Math.sin(Math.min(Math.PI, pose.theta)));
+  }
+
+  endBend() {
+    if (this.bendState) this.setPaper(this.bendState);
+  }
+
+  /** The lattice destination remains independent of the live bend. */
+  setLanding(move: Facet[] | null, line: Line | null) {
+    this.clearGroup(this.landing);
+    if (!line || !this.bendState) return;
+    for (const f of move ?? this.bendState.facets) {
+      const poly = move ? f.poly : clipConvex(f.poly, line, 1);
+      if (poly.length < 3) continue;
+      const land = { ...f, poly: poly.map((p) => reflectPoint(line, p)) };
+      const mesh = new Mesh(facetGeometry(land, this.hingeY + LAYER_GAP * 0.3), this.landMat);
+      mesh.renderOrder = 40;
+      this.landing.add(mesh);
+    }
   }
 
   private addFacets(group: Group, facets: readonly Facet[], lift: number) {
@@ -247,11 +286,15 @@ export class PaperView {
 
   dispose() {
     this.clearGroup(this.stack);
-    this.clearGroup(this.flapInner);
+    this.bent.length = 0;
+    this.bendState = null;
+    this.walls = null;
+    this.wallGeometryLive = null;
     this.matFront.dispose();
     this.matBack.dispose();
     this.edgeMat.dispose();
     this.clearGroup(this.landing);
     this.landMat.dispose();
+    this.wallMat.dispose();
   }
 }

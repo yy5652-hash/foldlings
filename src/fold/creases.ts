@@ -44,7 +44,7 @@ export interface Point3 {
 }
 
 /** Crease that would carry P (on the table) to H (anywhere above it). */
-export function rawCrease(p: V2, hand: Point3): Line | null {
+export function rawCrease(p: V2, hand: Point3, out?: Line): Line | null {
   const dx = hand.x - p.x;
   const dy = hand.y - p.y;
   const len = Math.hypot(dx, dy);
@@ -52,7 +52,9 @@ export function rawCrease(p: V2, hand: Point3): Line | null {
   const rhs =
     (hand.x * hand.x + hand.y * hand.y + hand.h * hand.h - p.x * p.x - p.y * p.y) /
     2;
-  return { nx: dx / len, ny: dy / len, d: rhs / len };
+  if (!out) out = { nx: 0, ny: 0, d: 0 };
+  out.nx = dx / len; out.ny = dy / len; out.d = rhs / len;
+  return out;
 }
 
 export interface Snap extends FoldSpec {
@@ -69,9 +71,9 @@ function lineDistanceNear(raw: Line, cand: Line, p: V2): number {
   const tx = -raw.ny;
   const ty = raw.nx;
   let worst = 0;
-  for (const t of [-0.06, 0, 0.06]) {
-    const q = { x: fx + tx * t, y: fy + ty * t };
-    worst = Math.max(worst, Math.abs(lineSide(cand, q)));
+  for (let i = -1; i <= 1; i++) {
+    const t = i * 0.06;
+    worst = Math.max(worst, Math.abs(cand.nx * (fx + tx * t) + cand.ny * (fy + ty * t) - cand.d));
   }
   return worst;
 }
@@ -81,6 +83,20 @@ export function onBoard(paper: PaperState): boolean {
   const b = paperBounds(paper);
   const e = 1e-6;
   return b.minX >= BOARD.minX - e && b.maxX <= BOARD.maxX + e && b.minY >= BOARD.minY - e && b.maxY <= BOARD.maxY + e;
+}
+
+/** Validity depends only on the sheet and grab point, so prepare it once per drag. */
+export function prepareSnaps(paper: PaperState, p: V2): Snap[] {
+  const candidates: Snap[] = [];
+  for (const c of CREASES) {
+    const line = creaseLine(c);
+    const side = lineSide(line, p);
+    if (Math.abs(side) < 0.004) continue;
+    const s = side > 0 ? 1 : -1;
+    const folded = foldPaper(paper, line, s);
+    if (folded && onBoard(folded)) candidates.push({ ...c, s, line, error: 0 });
+  }
+  return candidates;
 }
 
 /**
@@ -94,11 +110,15 @@ export function snapCrease(
   paper: PaperState,
   prev: Crease | null = null,
   maxError = 0.05,
+  candidates?: readonly Snap[],
 ): Snap | null {
   let best: Snap | null = null;
   let bestScore = Infinity;
-  for (const c of CREASES) {
-    const line = creaseLine(c);
+  const choices = candidates ?? CREASES;
+  for (let i = 0; i < choices.length; i++) {
+    const c = choices[i];
+    const cached = candidates?.[i];
+    const line = cached?.line ?? creaseLine(c);
     const side = lineSide(line, p);
     if (Math.abs(side) < 0.004) continue;
     const s: 1 | -1 = side > 0 ? 1 : -1;
@@ -107,10 +127,13 @@ export function snapCrease(
     const sticky = prev && prev.f === c.f && prev.k === c.k ? 0.007 : 0;
     const score = error - sticky;
     if (score >= bestScore) continue;
-    const folded = foldPaper(paper, line, s);
-    if (!folded || !onBoard(folded)) continue;
+    if (!cached) {
+      const folded = foldPaper(paper, line, s);
+      if (!folded || !onBoard(folded)) continue;
+    }
     bestScore = score;
-    best = { ...c, s, line, error };
+    best = cached ?? { ...c, s, line, error };
+    best.error = error;
   }
   return best;
 }
