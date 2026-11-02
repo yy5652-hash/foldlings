@@ -180,6 +180,8 @@ export class GameSystem extends createSystem({
   private deliveryActive = false;
   private deliveryForced = false;
   private deliveryPoint = new Vector3();
+  private deliveryX = -0.29;
+  private deliveryReady = false;
   private landing: HTMLElement | null = null;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
@@ -354,6 +356,8 @@ export class GameSystem extends createSystem({
     this.dailySheet.root.rotation.x = 0.55;
     this.dailyLight = new Mesh(new PlaneGeometry(0.07, 0.07), holoPane(new Color(0x8fe6ff)));
     this.dailyLight.rotation.x = -Math.PI / 2;
+    // Only the button's own disc takes touches.
+    this.dailyLight.raycast = () => {};
     this.dailySheet.root.add(this.dailyLight);
     const dailyLabel = new TextLabel(0.013);
     dailyLabel.set("Today's fold");
@@ -527,6 +531,7 @@ export class GameSystem extends createSystem({
       this.clearDelivery();
       startMusic();
       this.sessionTime = 0;
+      this.deliveryReady = false;
       this.lastScan = -10;
       this.foldReadyAt = null;
       this.awakeAt = null;
@@ -880,9 +885,14 @@ export class GameSystem extends createSystem({
       return;
     }
     if (!this.deliveryActive) {
+      if (!this.deliveryForced && !this.deliveryReady) return;
       if (!this.deliveryForced && !this.world.renderer.xr.isPresenting && !this.landing?.classList.contains('hidden')) return;
       if ((!this.deliveryForced && this.progress.deliveredDay === this.deliveryDay) || this.game.busy || this.game.inputLocked || this.celebrate || this.title.playing || this.roomModel.showing) return;
-      this.deliveryPoint.set(-0.29, 0.14, -0.02);
+      // Opposite the capsule, and closer in when the view is narrow.
+      const out = this.settings.leftHanded ? 1 : -1;
+      this.deliveryX = out * (viewFov(this.world).mode === 'narrow' ? 0.22 : 0.29);
+      // The creature settles beyond the sheet, so a touch reaches the sheet.
+      this.deliveryPoint.set(this.deliveryX + out * 0.12, 0.08, -0.02);
       this.game.boardRoot.localToWorld(this.deliveryPoint);
       if (!this.zoo.deliverToday(this.deliveryDay, this.deliveryPoint, this.deliveryForced)) return;
       this.deliveryActive = true;
@@ -896,7 +906,10 @@ export class GameSystem extends createSystem({
       this.game.boardRoot.worldToLocal(this.deliveryPoint);
       this.dailySheet.root.position.copy(this.deliveryPoint);
     } else {
-      this.dailySheet.root.position.set(-0.29, 0.14 + (this.settings.reduceMotion ? 0 : Math.sin(this.deliveryTime * 1.6) * 0.004), -0.02);
+      const bob = this.settings.reduceMotion ? 0 : Math.sin(this.deliveryTime * 1.6) * 0.006;
+      this.deliveryPoint.set(this.deliveryX, 0.14 + bob, -0.02);
+      // Eased, because it was just carried in on the creature.
+      this.dailySheet.root.position.lerp(this.deliveryPoint, 1 - Math.exp(-dt * 6));
     }
     this.dailyLight.scale.setScalar(this.settings.reduceMotion ? 1 : 1 + Math.sin(this.deliveryTime * 2) * 0.035);
   }
@@ -1231,6 +1244,8 @@ export class GameSystem extends createSystem({
       if (this.room.ready && this.sessionTime > 2.5 && this.moveT >= 1) {
         const n = this.zoo.restore(this.boardWorld(), this.mode === 'ar');
         if (n) {
+          // Only a returning player's creatures bring today's fold.
+          this.deliveryReady = true;
           this.game.say(
             n === 1 ? 'Welcome back! Your paper friend is still here' : `Welcome back! Your ${n} paper friends are still here`,
             4,
