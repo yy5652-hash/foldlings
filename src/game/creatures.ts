@@ -70,7 +70,7 @@ export class Creature {
     this.bob.add(this.rig.body);
     this.root.add(this.bob);
     this.rest = this.rig.folds.map((f) => f.obj.quaternion.clone());
-    this.lastBeat = this.rig.folds.reduce((m, f) => Math.max(m, f.beat), 0);
+    this.lastBeat = this.rig.morph ? this.rig.morph.stages - 1 : this.rig.folds.reduce((m, f) => Math.max(m, f.beat), 0);
     if (this.rig.head) this.headRest.copy(this.rig.head.quaternion);
     const target = this.root as unknown as {
       addEventListener(type: string, fn: () => void): void;
@@ -128,6 +128,16 @@ export class Creature {
   private applyFold() {
     const t = this.foldT;
     const beat = Math.floor(t / FOLD_BEAT);
+    if (this.rig.morph) {
+      while (this.beat < Math.min(beat, this.lastBeat)) {
+        this.flash = 1;
+        sfx.foldBeat(++this.beat);
+      }
+      this.bob.scale.setScalar(1);
+      this.rig.morph.apply(t / this.foldDuration);
+      for (let i = 0; i < this.rig.eyes.length; i++) this.rig.eyes[i].scale.y = 0.08;
+      return;
+    }
     if (beat !== this.beat && beat <= this.lastBeat) {
       this.beat = beat;
       this.flash = 1;
@@ -159,6 +169,10 @@ export class Creature {
     if (this.foldT >= 0) {
       this.foldT += dt;
       if (this.foldT >= this.foldDuration) {
+        if (this.rig.morph) {
+          this.applyFold();
+          this.rig.morph.apply(1);
+        }
         this.foldT = -1;
         this.bob.scale.setScalar(1);
         this.rig.folds.forEach((f, i) => f.obj.quaternion.copy(this.rest[i]));
@@ -288,9 +302,9 @@ export class Creature {
       this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
       this.bob.add(this.volume.mesh, this.volume.sand);
     }
-    // Layers a centimetre or more apart are what the two eyes read as depth.
-    this.rig.holo.uniforms.uThick.value = on ? 0.0105 : 0.0058;
-    this.rig.core.uniforms.uThick.value = on ? 0.008 : 0.0058;
+    // Keep real paper thin; the legacy solids retain their presentation depth.
+    this.rig.holo.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.0105 : 0.0058;
+    this.rig.core.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.008 : 0.0058;
     // Thick layers overlap, so each one burns lower to keep the form readable.
     this.rig.holo.uniforms.uGlow.value = on ? 0.6 : 1;
     this.rig.core.uniforms.uGlow.value = on ? 0.52 : 0.8;
@@ -336,6 +350,7 @@ export class Creature {
 
   /** How many flat faces the model is made of. */
   get facets(): number {
+    if (this.rig.facetCount !== undefined) return this.rig.facetCount;
     let n = 0;
     this.root.traverse((o) => {
       if ((o as Mesh).isMesh && o.name === 'Paper') n += (o as Mesh).geometry.attributes.position.count / 3;

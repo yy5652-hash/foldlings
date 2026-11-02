@@ -13,6 +13,7 @@ import {
   Color,
   EdgesGeometry,
   Float32BufferAttribute,
+  FrontSide,
   Group,
   IcosahedronGeometry,
   LineBasicMaterial,
@@ -28,6 +29,9 @@ import {
 } from '@iwsdk/core';
 import { holoBody, holoCloud, holoCore, holoLine } from './holo.js';
 import type { CreatureKind } from './levels.js';
+import { baked } from './origami/baked.js';
+import { FoldUp } from './origami/fold-up.js';
+import type { BakedOrigami } from './origami/data.js';
 
 export type P = [number, number, number];
 type Tri = [P, P, P];
@@ -56,6 +60,8 @@ export interface Rig {
   earL?: Object3D;
   earR?: Object3D;
   folds: Fold[];
+  morph?: { stages: number; apply(t: number): void };
+  facetCount?: number;
   /** Crease lines; brightened while the creature folds itself up. */
   lines: LineBasicMaterial;
   /** The projected body: exploded view, slice and forming edge live on this. */
@@ -292,6 +298,8 @@ class Kit {
 
 interface Parts {
   body: Group;
+  morph?: Rig['morph'];
+  facetCount?: number;
   head?: Object3D;
   wingL?: Object3D;
   wingR?: Object3D;
@@ -300,6 +308,94 @@ interface Parts {
   legR?: Object3D;
   earL?: Object3D;
   earR?: Object3D;
+}
+
+function origami(k: Kit, data: BakedOrigami): Parts {
+  const body = new Group();
+  const fold = new FoldUp(data);
+  const positions = new Float32Array(data.positions.length * 3);
+  const parts = new Map<string, Group>();
+  const surfaces: { geometry: BufferGeometry; vertices: number[]; mesh: Mesh }[] = [];
+  k.holo.side = k.core.side = FrontSide;
+  for (const part of new Set(data.faces.map(face => face.part))) {
+    const model = k.model();
+    const vertices: number[] = [];
+    const creasePositions: number[] = [];
+    const creaseEdges = new Set<string>();
+    for (const face of data.faces) {
+      if (face.part !== part) continue;
+      face.vertices.forEach((a, j) => {
+        const b = face.vertices[(j + 1) % face.vertices.length];
+        const key = a < b ? `${a},${b}` : `${b},${a}`;
+        if (creaseEdges.has(key)) return;
+        creaseEdges.add(key);
+        creasePositions.push(...data.positions[a], ...data.positions[b]);
+      });
+      for (const triangle of face.triangles) {
+        const [a, b, c] = face.front ? triangle : [triangle[0], triangle[2], triangle[1]];
+        model.sheet(data.positions[a], data.positions[b], data.positions[c], face.front ? k.o : k.i, face.front ? k.i : k.o);
+        vertices.push(a, b, c, a, c, b);
+      }
+    }
+    const content = model.build();
+    const edges = content.getObjectByName('Creases') as LineSegments;
+    edges.geometry.dispose();
+    edges.geometry = new BufferGeometry();
+    edges.geometry.setAttribute('position', new Float32BufferAttribute(creasePositions, 3));
+    const mesh = content.getObjectByName('Paper') as Mesh;
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+    surfaces.push({ geometry: mesh.geometry, vertices, mesh });
+    const group = k.hinge(part[0].toUpperCase() + part.slice(1), data.pivots[part]!, content);
+    parts.set(part, group);
+    body.add(group);
+  }
+  for (const eye of data.eyes) {
+    const group = parts.get(eye.part);
+    if (!group) continue;
+    const face = eye.vertices.map(v => data.positions[v]) as Tri;
+    const center = mean(face);
+    const n = new Vector3().crossVectors(sub(face[1], face[0]), sub(face[2], face[0])).normalize();
+    const inside: P = [center[0] - n.x * eye.normalSign * .001, center[1] - n.y * eye.normalSign * .001, center[2] - n.z * eye.normalSign * .001];
+    group.children[0].add(k.eye(face, eye.weights, inside, eye.radius));
+  }
+  const hinges = [...parts.values()];
+  const morph = {
+    stages: data.stages,
+    apply(t: number) {
+      fold.apply(t, positions);
+      body.scale.setScalar(1);
+      for (let i = 0; i < hinges.length; i++) hinges[i].rotation.set(0, 0, 0);
+      for (let s = 0; s < surfaces.length; s++) {
+        const surface = surfaces[s], geometry = surface.geometry;
+        const p = geometry.attributes.position, n = geometry.attributes.normal;
+        for (let j = 0; j < surface.vertices.length; j++) {
+          const v = surface.vertices[j] * 3;
+          p.setXYZ(j, positions[v], positions[v + 1], positions[v + 2]);
+        }
+        for (let j = 0; j < p.count; j += 3) {
+          const ax = p.getX(j + 1) - p.getX(j), ay = p.getY(j + 1) - p.getY(j), az = p.getZ(j + 1) - p.getZ(j);
+          const bx = p.getX(j + 2) - p.getX(j), by = p.getY(j + 2) - p.getY(j), bz = p.getZ(j + 2) - p.getZ(j);
+          const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+          const length = Math.hypot(nx, ny, nz) || 1;
+          n.setXYZ(j, nx / length, ny / length, nz / length);
+          n.setXYZ(j + 1, nx / length, ny / length, nz / length);
+          n.setXYZ(j + 2, nx / length, ny / length, nz / length);
+        }
+        p.needsUpdate = n.needsUpdate = true;
+        surface.mesh.frustumCulled = t >= 1;
+        k.cores[s].frustumCulled = t >= 1;
+      }
+      for (let i = 0; i < k.edges.length; i++) k.edges[i].visible = t >= 1;
+      for (let i = 0; i < k.clouds.length; i++) k.clouds[i].visible = t >= 1;
+      for (let i = 0; i < k.eyes.length; i++) k.eyes[i].visible = t >= 1;
+    },
+  };
+  const result: Parts = { body, morph, facetCount: data.faces.length };
+  for (const [part, field] of Object.entries(data.rig)) {
+    if (field !== 'body') result[field] = parts.get(part);
+  }
+  return result;
 }
 
 function crane(k: Kit): Parts {
@@ -697,7 +793,8 @@ const BUILDERS: Record<CreatureKind, (k: Kit) => Parts> = {
 /** Builds a fresh rig in the given outer (`front`) and inner paper colours. */
 export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
   const k = new Kit(new Color(front), new Color(back));
-  const parts = BUILDERS[kind](k);
+  const data = (baked as Partial<Record<CreatureKind, BakedOrigami>>)[kind];
+  const parts = data ? origami(k, data) : BUILDERS[kind](k);
   const root = new Group();
   root.name = `Creature_${kind}`;
   parts.body.name = 'Body';
@@ -715,6 +812,8 @@ export function buildRig(kind: CreatureKind, front: string, back: string): Rig {
     earL: parts.earL,
     earR: parts.earR,
     folds: k.folds,
+    morph: parts.morph,
+    facetCount: parts.facetCount,
     lines: k.lines,
     holo: k.holo,
     core: k.core,

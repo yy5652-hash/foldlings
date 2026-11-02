@@ -10,6 +10,7 @@
     "dev:status": "iwsdk dev status",
     "reference:status": "iwsdk reference status",
     "reference:warmup": "iwsdk reference warmup",
+    "bake:origami": "node scripts/bake-origami.ts",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview"
