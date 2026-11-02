@@ -13,7 +13,7 @@ import { contentTexture, drawIcon, drawStars, GlassWindow, INK, LAYER, setFont, 
 import { Level, LEVELS, PER_WORLD, WORLDS } from './levels.js';
 import { Best, totalStars, UNLOCK, worldOpen } from './score.js';
 import type { HandBodies } from './hand-bodies.js';
-import { PinchPull } from './pinch-pull.js';
+import { PINCH_REACH, PinchPull } from './pinch-pull.js';
 import { sfx } from './sfx.js';
 
 const W = 0.5;
@@ -132,7 +132,7 @@ export class LevelSelect {
           this.win.content.worldToLocal(this.local);
           const px = (this.local.x / W + 0.5) * PX;
           const py = (0.5 - this.local.y / H) * this.win.py;
-          if (Math.abs(this.local.z) < 0.04 && px >= t.x && px <= t.x + t.w && py >= t.y && py <= t.y + t.h) return;
+          if (Math.abs(this.local.z) < PINCH_REACH && px >= t.x && px <= t.x + t.w && py >= t.y && py <= t.y + t.h) return;
         }
       }
       sfx.click();
@@ -443,7 +443,7 @@ export class LevelSelect {
         }
         this.local.copy(hand.at);
         this.win.content.worldToLocal(this.local);
-        pull.update(hand.on, this.local.x, this.local.y, this.local.z, dt, Math.abs(this.local.z) < 0.04);
+        pull.update(hand.on, this.local.x, this.local.y, this.local.z, dt, Math.abs(this.local.z) < PINCH_REACH);
         if (pull.active && tile.owner < 0) {
           tile.owner = i;
           sfx.pick();

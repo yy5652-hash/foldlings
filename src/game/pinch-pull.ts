@@ -6,6 +6,9 @@ export interface HitRect {
 }
 
 /** One pinch owns a pull until release; failed pulls return smoothly to rest. */
+/** How far in front of a panel a pinch still counts as pinching it. */
+export const PINCH_REACH = 0.06;
+
 export class PinchPull {
   progress = 0;
   commit = false;

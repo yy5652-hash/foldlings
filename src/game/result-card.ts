@@ -10,7 +10,7 @@ import { Button } from './button.js';
 import { CONTROL_GLASS, DISPLAY, floatOverRoom, GlassWindow, hitPlane, INK, LAYER, setFont, Spring, Surface, TextLabel } from './glass.js';
 import type { Best, Result } from './score.js';
 import type { HandBodies } from './hand-bodies.js';
-import { PinchPull } from './pinch-pull.js';
+import { PINCH_REACH, PinchPull } from './pinch-pull.js';
 import { sfx } from './sfx.js';
 
 export type ResultAction = 'next' | 'retry' | 'levels';
@@ -239,7 +239,7 @@ export class ResultCard {
         this.local.copy(hand.at);
         this.win.root.worldToLocal(this.local);
         if (!pull.active) pull.distance = Math.max(0.01, this.local.x * 2);
-        pull.update(hand.on, this.local.x, this.local.y, -this.local.x, dt, Math.abs(this.local.z) < 0.04);
+        pull.update(hand.on, this.local.x, this.local.y, -this.local.x, dt, Math.abs(this.local.z) < PINCH_REACH);
         if (pull.active && this.pullHand < 0) {
           this.pullHand = i;
           sfx.pick();
