@@ -8,6 +8,8 @@ import type { Definition } from './definition.js';
 export const patterns = [
   () => import('./crane.js').then(m => m.crane()),
   () => import('./frog.js').then(m => m.frog()),
+  () => import('./butterfly.js').then(m => m.butterfly()),
+  () => import('./boat.js').then(m => m.boat()),
 ];
 
 /** Rigid frame taking the original sheet plane to a final face. */
