@@ -32,3 +32,20 @@ export function validateSheet(value: unknown, today = dayNumber()): SavedSheet |
 export function serialiseSheet(id: string, played: readonly FoldSpec[], hinted: boolean): SavedSheet | null {
   return validateSheet({ id, played, hinted });
 }
+
+/** Valid slots, oldest first; accepts the former single-sheet save on migration. */
+export function savedSheets(values: unknown, legacy?: unknown, today = dayNumber()): SavedSheet[] {
+  const slots: SavedSheet[] = [];
+  for (const value of Array.isArray(values) ? values : [legacy]) {
+    const sheet = validateSheet(value, today);
+    if (!sheet) continue;
+    const index = slots.findIndex((slot) => slot.id === sheet.id);
+    if (index >= 0) slots.splice(index, 1);
+    slots.push(sheet);
+  }
+  return slots.slice(-6);
+}
+
+export function storeSheet(slots: readonly SavedSheet[], sheet: SavedSheet): SavedSheet[] {
+  return [...slots.filter((slot) => slot.id !== sheet.id), sheet].slice(-6);
+}

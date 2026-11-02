@@ -5,7 +5,7 @@
 
 import { SessionMode, World } from '@iwsdk/core';
 import { unlockAudio } from '../game/sfx.js';
-import { formatCode } from '../game/share.js';
+import { decodeFolds, encodeFolds, formatCode } from '../game/share.js';
 
 async function supported(mode: XRSessionMode): Promise<boolean> {
   try {
@@ -22,6 +22,16 @@ export async function setupLanding(world: World) {
   const note = document.getElementById('note')!;
   const mouse = document.getElementById('try-mouse') as HTMLButtonElement;
   setupScrollReveal(landing);
+  const shared = new URLSearchParams(location.search).get('p');
+  const folds = shared ? decodeFolds(shared) : null;
+  if (folds) {
+    const invitation = document.getElementById('shared-puzzle')!;
+    invitation.textContent = `A friend folded this for you · ${formatCode(encodeFolds(folds))}`;
+    invitation.hidden = false;
+    ar.textContent = 'Fold it in your room';
+    vr.textContent = 'Fold it in VR';
+    mouse.textContent = 'Fold it here with a mouse';
+  }
 
   const [arOk, vrOk] = await Promise.all([supported('immersive-ar'), supported('immersive-vr')]);
   ar.disabled = !arOk;
@@ -102,8 +112,19 @@ function showShare() {
   const copy = document.createElement('button');
   copy.className = 'ghost';
   copy.textContent = 'Copy link';
-  copy.addEventListener('click', () => {
-    void navigator.clipboard?.writeText(link).then(() => (copy.textContent = 'Copied'));
+  copy.addEventListener('click', async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Foldlings', text: 'A friend folded this for you', url: link });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(link);
+      copy.textContent = 'Copied';
+    } catch { /* Clipboard access may be unavailable. */ }
   });
   el.append(copy);
   el.hidden = false;

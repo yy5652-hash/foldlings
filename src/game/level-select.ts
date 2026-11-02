@@ -36,7 +36,7 @@ export interface LevelBookHost {
   play: (index: number) => void;
   daily: () => void;
   /** Saved player puzzles, newest first. */
-  mine: () => { level: Level; code: string }[];
+  mine: () => { level: Level; code: string; link: string }[];
   free: () => void;
   playLevel: (level: Level) => void;
 }
@@ -193,7 +193,9 @@ export class LevelSelect {
       g.textAlign = 'center';
       g.fillStyle = INK.primary;
       setFont(g, 22, 600, 1.5);
-      g.fillText(m.code, cx, t.y + 229, t.w - 20);
+      g.fillText(m.code, cx, t.y + 220, t.w - 20);
+      setFont(g, 14, 400);
+      g.fillText(m.link, cx, t.y + 244, t.w - 20);
     });
     this.win.commit();
   }

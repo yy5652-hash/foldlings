@@ -25,7 +25,8 @@ import {
   Entity,
 } from '@iwsdk/core';
 import { CREATURE_KINDS } from './creature-models.js';
-import { Creature, Habitat } from './creatures.js';
+import { homeScore, preferredHome, type HomeSurface } from './home-score.js';
+import { Creature, HABITAT } from './creatures.js';
 import type { Hands, HandState } from './hands.js';
 import type { CreatureKind } from './levels.js';
 import { LOOKS } from './levels.js';
@@ -189,7 +190,7 @@ class HomeMarker {
 /** Plain words for a surface, preferring the room scan's own label. */
 function describe(s: Surface): string {
   const label = s.label.toLowerCase().replace(/_/g, ' ');
-  const known = ['table', 'desk', 'couch', 'sofa', 'bed', 'shelf', 'storage', 'screen', 'window', 'door', 'floor', 'wall'];
+  const known = ['table', 'desk', 'couch', 'sofa', 'bed', 'shelf', 'storage', 'screen', 'window', 'door', 'floor', 'wall', 'rug', 'plant', 'lamp'];
   if (known.includes(label)) return label === 'storage' ? 'shelf' : label;
   return s.kind === 'table' ? 'table' : s.kind;
 }
@@ -218,6 +219,8 @@ export class Menagerie {
   private markerTime = 0;
   private reduceMotion = false;
   private placedThisSession = false;
+  private restoredCount = 0;
+  private delivery: Live | null = null;
   /** True in passthrough: spots refer to the player's real room. */
   realRoom = false;
   private avoid = new Vector3(0, -10, 0);
@@ -287,6 +290,8 @@ export class Menagerie {
   }
 
   private clearLive() {
+    this.delivery = null;
+    this.restoredCount = 0;
     for (const l of this.live) {
       l.entity.dispose();
       l.c.dispose();
@@ -306,7 +311,8 @@ export class Menagerie {
   }
 
   /** World position for a new home, plus the facing it should rest with. */
-  private findHome(habitat: Habitat, avoid: Vector3): Home {
+  private findHome(kind: CreatureKind, avoid: Vector3): Home {
+    const habitat = HABITAT[kind];
     const head = this.head();
     const fwd = this.forward();
     const others = this.live.map((l) => l.c.root.getWorldPosition(new Vector3()));
@@ -382,25 +388,17 @@ export class Menagerie {
           ? Math.abs(this.tmp.copy(o).sub(s.center).dot(s.normal)) < 0.08
           : Math.abs(o.y - s.center.y) < 0.12 && pointInPoly(o.x, o.z, s.polygon),
       ).length;
-    const near = (s: Surface) =>
-      s.center.distanceTo(head) * 0.6 + crowd(s) * 0.45 + Math.random() * 0.5 + (s.kind === 'floor' ? 0.35 : 0);
-    let home: Home | null = null;
-    switch (habitat) {
-      case 'ground':
-        home = pick(['table', 'floor'], near);
-        break;
-      case 'perch':
-        // Up high, but not above the player's view.
-        home = pick(['table'], (s) =>
-          (s.center.y > head.y + 0.6 ? 2 : -s.center.y) + crowd(s) * 0.3 + Math.random() * 0.3,
-        );
-        break;
-      case 'wall':
-        home = pick(['wall'], near);
-        break;
-      default:
-        break;
-    }
+    const nature = this.surfaces.filter((s) => ['window', 'plant'].includes(s.label.toLowerCase()));
+    const input = (s: Surface): HomeSurface => ({
+      kind: s.kind, label: s.label, height: s.center.y - head.y,
+      distance: s.center.distanceTo(head), crowding: crowd(s),
+      natureDistance: nature.length ? Math.min(...nature.map((n) => n.center.distanceTo(s.center))) : undefined,
+    });
+    const preferred = this.surfaces.some((s) => preferredHome(kind, input(s)));
+    const home = habitat === 'air' || habitat === 'high-air' ? null : pick(
+      habitat === 'wall' ? ['wall'] : habitat === 'perch' ? ['table'] : ['table', 'floor'],
+      (s) => homeScore(kind, input(s), preferred) + Math.random() * 0.3,
+    );
     if (home) return home;
     // Air, or no suitable surface: a spot floating around the player, kept
     // inside the room (on the player's side of every scanned wall, with room
@@ -475,13 +473,14 @@ export class Menagerie {
     let moved = false;
     for (const l of this.live) {
       if (l.c.root.visible) continue;
-      const home = this.findHome(l.c.habitat, this.avoid);
+      const home = this.findHome(l.c.kind, this.avoid);
       this.settleAt(l, home.pos, home.normal, home.air);
       l.saved.anchored = this.room.anchored;
       l.c.root.visible = true;
       moved = true;
     }
     if (moved && persist) this.save();
+    this.restoredCount = this.live.length;
     return this.live.length;
   }
 
@@ -535,7 +534,7 @@ export class Menagerie {
   /** A new creature pops out of the paper at `from` and goes home. */
   reveal(kind: CreatureKind, look: number, from: Vector3, avoid: Vector3): { where: string; prelude: number } {
     const { c, entity } = this.spawnEntity(kind, look);
-    const home = this.findHome(c.habitat, avoid);
+    const home = this.findHome(c.kind, avoid);
     const rest = this.restPose(home.pos, home.normal);
     const saved: SavedCreature = {
       kind,
@@ -586,6 +585,42 @@ export class Menagerie {
     return { where: home.where, prelude };
   }
 
+  /** A restored friend carries a daily invitation; its saved home never changes. */
+  deliverToday(day: number, besideMat: Vector3, force = false): boolean {
+    const count = force ? this.live.length : this.restoredCount;
+    if (!count || this.delivery) return false;
+    const l = this.live[((day % count) + count) % count];
+    if (!l || l.travel || l.perch || l.parade) return false;
+    this.delivery = l;
+    if (this.reduceMotion) return true;
+    l.orbit = null;
+    l.endAir = false;
+    this.hopHome(l, this.toRoom(besideMat), true);
+    return true;
+  }
+
+  /** Writes into the caller's temporary while the invitation is in flight. */
+  deliveryPosition(out: Vector3): boolean {
+    if (!this.delivery?.travel) return false;
+    this.delivery.c.root.getWorldPosition(out);
+    out.y += 0.045;
+    return true;
+  }
+
+  dismissDelivery() {
+    const l = this.delivery;
+    if (!l) return;
+    this.delivery = null;
+    if (this.reduceMotion) return;
+    l.endAir = l.c.habitat === 'air' || l.c.habitat === 'high-air';
+    this.hopHome(l);
+  }
+
+  isTravelling(kind: CreatureKind): boolean {
+    for (const l of this.live) if (l.c.kind === kind && l.travel) return true;
+    return false;
+  }
+
   update(dt: number) {
     this.confetti.update(dt);
     this.shock.update(dt);
@@ -612,7 +647,7 @@ export class Menagerie {
         this.stepParade(l, dt, head);
         continue;
       }
-      if (!l.travel && this.hands) this.checkPalm(l, dt);
+      if (l !== this.delivery && !l.travel && this.hands) this.checkPalm(l, dt);
       l.c.update(dt);
       // Now and then a resting creature stirs on its own (about every 40 s).
       if (!l.travel && Math.random() < dt / 40) l.c.fidget(Math.random() < 0.3);
@@ -848,14 +883,14 @@ export class Menagerie {
   }
 
   /** Back to its own spot when the palm turns over or goes away. */
-  private hopHome(l: Live) {
+  private hopHome(l: Live, destination?: Vector3, fly = false) {
     l.perch = null;
     const from = l.c.root.position.clone();
-    const to = new Vector3().fromArray(l.saved.p);
+    const to = destination ?? new Vector3().fromArray(l.saved.p);
     const endQuat = l.saved.n
       ? new Quaternion().setFromUnitVectors(UP, new Vector3().fromArray(l.saved.n))
       : new Quaternion().setFromAxisAngle(UP, l.saved.yaw);
-    const flying = l.c.habitat !== 'ground';
+    const flying = fly || l.c.habitat !== 'ground';
     const dist = from.distanceTo(to);
     l.travel = {
       from,
