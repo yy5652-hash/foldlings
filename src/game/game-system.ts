@@ -403,7 +403,8 @@ export class GameSystem extends createSystem({
     if (import.meta.env.DEV) {
       // Test hook: board point (u, v, height) → world position.
       (window as unknown as Record<string, unknown>).__foldlings = {
-        realDepth,
+        realDepth: () => realDepth.status(),
+        setRealDepth: (on: boolean) => realDepth.setEnabled(on),
         renderScale: () => {
           const xr = this.world.renderer.xr;
           const layer = xr.getBaseLayer();

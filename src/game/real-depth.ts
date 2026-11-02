@@ -20,7 +20,8 @@ void main() {
     coord.x -= float(eye);
   #endif
   float raw = texture(depthColor, vec3(coord, float(eye))).r;
-  if (raw >= 1.0) {
+  // A pixel with no reading must never hide the projection.
+  if (raw <= 0.0 || raw >= 1.0) {
     gl_FragDepth = 1.0;
     return;
   }
@@ -38,8 +39,9 @@ export function installRealDepth(world: World) {
   const near = new Vector2();
   const far = new Vector2();
   let patched: Mesh | null = null;
-  xr.getDepthSensingMesh = () => {
-    const mesh = original();
+  let enabled = true;
+  const pass = () => {
+    const mesh = enabled ? original() : null;
     if (!mesh) return null;
     if (mesh !== patched) {
       const stock = mesh.material as ShaderMaterial;
@@ -73,17 +75,35 @@ export function installRealDepth(world: World) {
     }
     return mesh;
   };
+  // IWSDK assigns a null stub at every session start, because its own occlusion
+  // patches stock material chunks. Ours are custom shaders, so the pass must stay.
+  Object.defineProperty(xr, 'getDepthSensingMesh', { configurable: true, get: () => pass, set: () => {} });
+  // The headset hands out a new native texture as the depth map updates.
+  world.onXRFrame((frame) => {
+    const texture = xr.getDepthTexture();
+    const ref = xr.getReferenceSpace();
+    if (!texture || !ref) return;
+    const view = frame.getViewerPose(ref)?.views[0];
+    const info = view ? xr.getBinding()?.getDepthInformation(view) : null;
+    if (info?.texture) texture.sourceTexture = info.texture;
+  });
   world.renderer.xr.addEventListener('sessionend', () => {
     if (patched) (patched.material as ShaderMaterial).dispose();
     patched = null;
   });
-  return () => {
-    const session = xr.getSession();
-    const granted = session?.enabledFeatures?.includes('depth-sensing') ?? false;
-    return {
-      granted,
-      usage: granted ? session!.depthUsage ?? null : null,
-      bias: BIAS,
-    };
+  return {
+    setEnabled(on: boolean) {
+      enabled = on;
+    },
+    status() {
+      const session = xr.getSession();
+      const granted = session?.enabledFeatures?.includes('depth-sensing') ?? false;
+      return {
+        granted,
+        usage: granted ? session!.depthUsage ?? null : null,
+        bias: BIAS,
+        active: !!pass(),
+      };
+    },
   };
 }

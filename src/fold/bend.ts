@@ -100,7 +100,8 @@ export function solveBend(p: V2, hand: Point3, paper: PaperState, prevN: V2 | nu
   if (s > max) {
     s = max;
     theta = s > 0 ? Math.atan2(h, s - dx * nx - dy * ny) : 0;
-    radius = 0;
+    // Keep the radius: the sheet is out of reach here, and must not pop.
+    radius = Math.min(radius, s / Math.max(theta, 1e-3));
   }
   out.d -= s;
   out.theta = theta;

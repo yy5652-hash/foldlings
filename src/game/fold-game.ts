@@ -186,6 +186,8 @@ export class FoldGame {
   private settle: Settle | null = null;
   private bend: BendPose = { nx: 1, ny: 0, d: 0, theta: 0, radius: 0, residual: 0 };
   private bendNormal = { x: 1, y: 0 };
+  /** Metres from the unfiltered hand to the held point, this frame. */
+  heldLag = 0;
   private hasBendNormal = false;
   private handTarget: Point3 = { x: 0, y: 0, h: 0 };
   private heldPoint = { x: 0, y: 0, h: 0, nx: 0, ny: 0, nh: 1 };
@@ -1127,6 +1129,11 @@ export class FoldGame {
     }
     bendPoint(d.p.x, d.p.y, d.heldHeight, this.bend, this.paperView.hingeY, this.heldPoint);
     this.bend.residual = Math.hypot(this.heldPoint.x - hand.x, this.heldPoint.y - hand.y, this.heldPoint.h - hand.h);
+    this.heldLag = Math.hypot(
+      this.heldPoint.x - (d.hand.x - d.offset.x * offset),
+      this.heldPoint.y - (d.hand.y - d.offset.y * offset),
+      this.heldPoint.h - (d.hand.h - d.offset.h * offset),
+    );
     this.paperView.setBend(this.bend);
     if (!d.snap) {
       d.angle = 0;
