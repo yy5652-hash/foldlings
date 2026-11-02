@@ -74,7 +74,7 @@ export function roomSurfaces(planes: PlaneInfo[], meshes: MeshInfo[]): Surface[]
     const areaB = (b.x1 - b.x0) * (b.z1 - b.z0);
     // A plane over the same footprint is the better top (a box may reach a
     // headboard or backrest), whatever its height.
-    const dup = out.some((s) => {
+    const dup = out.find((s) => {
       if (s.kind !== 'table') return false;
       const a = box(s);
       const ox = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
@@ -83,6 +83,10 @@ export function roomSurfaces(planes: PlaneInfo[], meshes: MeshInfo[]): Surface[]
       return (ox * oz) / Math.max(1e-6, Math.min(areaA, areaB)) > 0.6;
     });
     if (!dup) out.push(m);
+    else if (!dup.label || dup.label === 'other' || dup.label === 'table') {
+      // Keep the plane's outline and the furniture mesh's semantic identity.
+      dup.label = m.label;
+    }
   }
   return out;
 }

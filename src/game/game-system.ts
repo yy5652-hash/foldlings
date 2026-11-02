@@ -12,6 +12,8 @@ import {
   DirectionalLight,
   Euler,
   Group,
+  Mesh,
+  PlaneGeometry,
   HemisphereLight,
   Vector3,
   VisibilityState,
@@ -22,7 +24,8 @@ import {
 } from '@iwsdk/core';
 import { FoldSpec, paperBounds } from '../fold/paper.js';
 import { Pause } from './pause.js';
-import { SavedSheet, serialiseSheet, validateSheet } from './resume.js';
+import { SavedSheet, savedSheets, serialiseSheet, storeSheet, validateSheet } from './resume.js';
+import { streak } from './streak.js';
 import { FoldGame } from './fold-game.js';
 import { CreatureKind, customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
 import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic, suspendAudio, resumeAudio } from './sfx.js';
@@ -34,7 +37,9 @@ import { Creature, HABITAT } from './creatures.js';
 import { HoloStage } from './holo-stage.js';
 import { RoomModel } from './room-model.js';
 import { HoloVolume } from './holo-volume.js';
-import { tickHolo } from './holo.js';
+import { InspectLesson } from './inspect-lesson.js';
+import { TextLabel } from './glass.js';
+import { holoPane, tickHolo } from './holo.js';
 import { QualityGuard } from './quality.js';
 import { HandBodies } from './hand-bodies.js';
 import { Dimmer } from './dimmer.js';
@@ -91,6 +96,9 @@ interface Progress {
   daily?: number[];
   muted?: boolean;
   titleSeen?: boolean;
+  inspectSeen?: boolean;
+  deliveredDay?: number;
+  sheets?: SavedSheet[];
   sheet?: SavedSheet | null;
 }
 
@@ -107,6 +115,7 @@ export class GameSystem extends createSystem({
   private room!: RoomFrame;
   private zoo!: Menagerie;
   private progress: Progress = { level: 0, solved: [], best: {}, version: 2 };
+  private openingShared = false;
   private sessionTime = -1;
   private desktopTime = 0;
   private surfaceClock = 0;
@@ -125,6 +134,7 @@ export class GameSystem extends createSystem({
     level: Level;
     revealed: boolean;
     firstSolve: boolean;
+    inspected?: boolean;
     vanished: boolean;
     where: string;
     sayAt: number;
@@ -160,8 +170,17 @@ export class GameSystem extends createSystem({
   private dimmer = new Dimmer();
   private stage!: HoloStage;
   private roomModel = new RoomModel();
-  private demo: { c: Creature; t: number; idle: number; yaw: number; pull: number; grabbed: boolean; grabX: number; grabZ: number } | null = null;
+  private demo: { c: Creature; t: number; idle: number; yaw: number; pull: number; grabbed: boolean; grabX: number; grabZ: number; lesson: InspectLesson | null } | null = null;
   private inspectClose!: Button;
+  private dailySheet!: Button;
+  private dailyLight!: Mesh;
+  private deliveryDay = dayNumber();
+  private deliveryClock = 0;
+  private deliveryTime = 0;
+  private deliveryActive = false;
+  private deliveryForced = false;
+  private deliveryPoint = new Vector3();
+  private landing: HTMLElement | null = null;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
@@ -184,6 +203,7 @@ export class GameSystem extends createSystem({
   private mode: 'desktop' | 'ar' | 'vr' = 'desktop';
 
   init(): void {
+    this.landing = document.getElementById('landing');
     // Soft room light for the mat, buttons and creatures.
     // Soft studio light: a warm window key that casts the only shadows (a
     // tight box around the mat), a cool fill, and a low sky/ground bounce;
@@ -221,16 +241,17 @@ export class GameSystem extends createSystem({
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
       onOpened: () => {
-        const sheet = validateSheet(this.progress.sheet);
-        if (sheet?.id === this.game.level.id) this.game.restoreSheet(sheet);
+        const sheet = this.openingShared ? null : this.progress.sheets?.find((slot) => slot.id === this.game.level.id);
+        if (sheet) this.game.restoreSheet(sheet);
         this.saveSheet();
       },
       onChanged: () => this.saveSheet(),
       onSolved: (level, _paper, _root, result) => {
         this.progress.sheet = null;
+        this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== level.id);
         this.saveProgress();
         this.zoo.cheer();
-        this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.titleSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
+        this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.inspectSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
       },
       onDaily: () => this.toggleDaily(),
       footer: () => {
@@ -273,7 +294,7 @@ export class GameSystem extends createSystem({
       mine: () =>
         [...(this.progress.custom ?? [])]
           .reverse()
-          .map((code, i, all) => ({ level: customLevel(code, all.length - 1 - i), code: formatCode(code) })),
+          .map((code, i, all) => ({ level: customLevel(code, all.length - 1 - i), code: formatCode(code), link: this.shortLink(code) })),
       free: () => {
         this.resultCard.hide();
         this.game.loadFree(FREE_LEVEL);
@@ -328,6 +349,21 @@ export class GameSystem extends createSystem({
     closeEntity.addComponent(RayInteractable);
     closeEntity.addComponent(PokeInteractable);
     this.roomModel.root.position.set(0, 0.25, -0.03);
+    this.dailySheet = new Button('daily', () => this.openDelivery(), '', { r: 0.035, plain: true });
+    this.dailySheet.root.name = 'Daily_delivery';
+    this.dailySheet.root.rotation.x = 0.55;
+    this.dailyLight = new Mesh(new PlaneGeometry(0.07, 0.07), holoPane(new Color(0x8fe6ff)));
+    this.dailyLight.rotation.x = -Math.PI / 2;
+    this.dailySheet.root.add(this.dailyLight);
+    const dailyLabel = new TextLabel(0.013);
+    dailyLabel.set("Today's fold");
+    dailyLabel.mesh.rotation.x = -Math.PI / 2;
+    dailyLabel.mesh.position.set(0, 0.002, 0.052);
+    this.dailySheet.root.add(dailyLabel.mesh);
+    const dailyEntity = this.world.createTransformEntity(this.dailySheet.root, this.game.boardEntity);
+    dailyEntity.addComponent(RayInteractable);
+    dailyEntity.addComponent(PokeInteractable);
+    this.dailySheet.setVisible(false);
     if (this.progress.muted) {
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
@@ -336,7 +372,7 @@ export class GameSystem extends createSystem({
     this.progress.sheet = sheet;
     const campaign = sheet ? LEVELS.findIndex((l) => l.id === sheet.id) : -1;
     if (sheet?.id === dailyLevel().id) {
-      this.game.loadDaily(dailyLevel(), 'A new fold every day');
+      this.game.loadDaily(dailyLevel(), this.dailySubtitle());
       this.game.button('daily')?.setIcon('back');
     } else if (sheet?.id.startsWith('my-')) {
       const code = sheet.id.slice(3);
@@ -348,7 +384,9 @@ export class GameSystem extends createSystem({
     if (shared && sharedFolds) {
       const code = encodeFolds(sharedFolds);
       this.addCustom(code);
+      this.openingShared = true;
       this.game.loadCustom(customLevel(code, -1), `Shared puzzle  ·  ${formatCode(code)}`);
+      this.openingShared = false;
     }
     this.game.boardRoot.position.copy(DESKTOP_POSITION);
     this.desk = makeDesk();
@@ -364,8 +402,10 @@ export class GameSystem extends createSystem({
         zoo: this.zoo,
         world: this.world,
         recenter: () => this.place(true),
+        deliverToday: () => { this.deliveryForced = true; },
         placement: () => this.placed && { label: this.placed.label, onSurface: this.placed.onSurface, p: this.placed.position.toArray().map((v) => +v.toFixed(2)) },
         resetAll: () => {
+          this.clearDelivery();
           this.zoo.reset();
           this.progress = { level: 0, solved: [], daily: [], muted: false, best: {}, version: 2 };
           this.saveProgress();
@@ -484,6 +524,7 @@ export class GameSystem extends createSystem({
       }
     }));
     this.world.renderer.xr.addEventListener('sessionstart', () => {
+      this.clearDelivery();
       startMusic();
       this.sessionTime = 0;
       this.lastScan = -10;
@@ -501,6 +542,7 @@ export class GameSystem extends createSystem({
       this.setMode(blend && blend !== 'opaque' ? 'ar' : 'vr');
     });
     this.world.renderer.xr.addEventListener('sessionend', () => {
+      this.clearDelivery();
       this.sessionTime = -1;
       this.desktopTime = 0;
       this.placed = null;
@@ -574,7 +616,7 @@ export class GameSystem extends createSystem({
   private beatIn = 0;
 
   /** Puts a kind from the album on the table, large, under the full projection. */
-  private inspect(kind: CreatureKind, look: number, times: number) {
+  private inspect(kind: CreatureKind, look: number, times: number, teach = false) {
     this.endInspect();
     this.album.hide();
     const c = new Creature(kind, LOOKS[look % LOOKS.length]);
@@ -584,7 +626,7 @@ export class GameSystem extends createSystem({
     this.game.hidePaper(true);
     this.game.setStage(false);
     c.setPresenting(true);
-    this.demo = { c, t: 0, idle: 0, yaw: 0, pull: 0, grabbed: false, grabX: 0, grabZ: 0 };
+    this.demo = { c, t: 0, idle: 0, yaw: 0, pull: 0, grabbed: false, grabX: 0, grabZ: 0, lesson: teach ? new InspectLesson() : null };
     this.game.inputLocked = true;
     this.inspectClose.root.position.set(0, 0.06, 0.2);
     this.stage.present(0.05, 0.42);
@@ -623,12 +665,14 @@ export class GameSystem extends createSystem({
     } else {
       d.pull = Math.max(0, d.pull - dt * 0.8);
     }
+    let turn = 0;
     if (one) {
       this.world.camera.getWorldDirection(this.ear);
       if (d.grabbed) {
         // Dragging across the view turns the body the same way.
         const dx = (one.at.x - d.grabX) * -this.ear.z + (one.at.z - d.grabZ) * this.ear.x;
-        d.yaw += dx * 8;
+        turn = dx * 8;
+        d.yaw += turn;
       }
       d.grabbed = true;
       d.grabX = one.at.x;
@@ -642,7 +686,7 @@ export class GameSystem extends createSystem({
     const breathe = 0.5 - 0.5 * Math.cos(d.t * 0.7);
     d.c.setExplode(Math.max(0.013 * breathe * breathe, 0.05 * d.pull));
     d.c.setScan(this.stage.scanY);
-    if (d.idle > INSPECT_SECONDS) this.endInspect();
+    if (d.lesson?.update(dt, turn, d.pull) || d.idle > INSPECT_SECONDS) this.endInspect();
   }
 
   /** Gives up the costliest extras if a headset cannot hold its frame rate. */
@@ -794,15 +838,67 @@ export class GameSystem extends createSystem({
   }
 
   private streak(): number {
-    const days = new Set(this.progress.daily ?? []);
-    let d = dayNumber();
-    if (!days.has(d)) d--;
-    let n = 0;
-    while (days.has(d)) {
-      n++;
-      d--;
+    return streak(this.progress.daily ?? [], dayNumber()).count;
+  }
+
+  private dailySubtitle(): string {
+    const { count, saved } = streak(this.progress.daily ?? [], dayNumber());
+    const sub = count > 0 ? `${count}-day streak` + (saved ? `, ${saved} ${saved === 1 ? 'day' : 'days'} saved` : '') : 'A new fold every day';
+    return (this.progress.daily ?? []).includes(dayNumber()) ? `Solved today · ${sub}` : sub;
+  }
+
+  private clearDelivery() {
+    this.zoo.dismissDelivery();
+    this.deliveryActive = false;
+    this.deliveryForced = false;
+    this.dailySheet.setVisible(false);
+  }
+
+  private openDelivery() {
+    if (!this.deliveryActive || this.game.busy || this.game.inputLocked || this.celebrate) return;
+    this.clearDelivery();
+    this.menu.close();
+    this.album.hide();
+    this.levelSelect.hide();
+    this.settingsPanel.close();
+    this.resultCard.hide();
+    if (!this.game.isDaily) this.toggleDaily();
+  }
+
+  private updateDelivery(dt: number) {
+    this.dailySheet.update(dt);
+    this.deliveryClock -= dt;
+    if (this.deliveryClock <= 0) {
+      this.deliveryClock = 30;
+      const today = dayNumber();
+      if (today !== this.deliveryDay) this.clearDelivery();
+      this.deliveryDay = today;
     }
-    return n;
+    const done = this.progress.daily?.includes(this.deliveryDay) || (this.game.isDaily && this.game.solved);
+    if (done && !this.deliveryForced) {
+      if (this.deliveryActive) this.clearDelivery();
+      return;
+    }
+    if (!this.deliveryActive) {
+      if (!this.deliveryForced && !this.world.renderer.xr.isPresenting && !this.landing?.classList.contains('hidden')) return;
+      if ((!this.deliveryForced && this.progress.deliveredDay === this.deliveryDay) || this.game.busy || this.game.inputLocked || this.celebrate || this.title.playing || this.roomModel.showing) return;
+      this.deliveryPoint.set(-0.29, 0.14, -0.02);
+      this.game.boardRoot.localToWorld(this.deliveryPoint);
+      if (!this.zoo.deliverToday(this.deliveryDay, this.deliveryPoint, this.deliveryForced)) return;
+      this.deliveryActive = true;
+      this.deliveryTime = 0;
+      this.progress.deliveredDay = this.deliveryDay;
+      this.saveProgress();
+      this.dailySheet.setVisible(true);
+    }
+    this.deliveryTime += dt;
+    if (this.zoo.deliveryPosition(this.deliveryPoint)) {
+      this.game.boardRoot.worldToLocal(this.deliveryPoint);
+      this.dailySheet.root.position.copy(this.deliveryPoint);
+    } else {
+      this.dailySheet.root.position.set(-0.29, 0.14 + (this.settings.reduceMotion ? 0 : Math.sin(this.deliveryTime * 1.6) * 0.004), -0.02);
+    }
+    this.dailyLight.scale.setScalar(this.settings.reduceMotion ? 1 : 1 + Math.sin(this.deliveryTime * 2) * 0.035);
   }
 
   private toggleDaily() {
@@ -812,10 +908,7 @@ export class GameSystem extends createSystem({
       return;
     }
     const today = dayNumber();
-    const done = (this.progress.daily ?? []).includes(today);
-    const n = this.streak();
-    const sub = done ? `Solved today · ${n}-day streak` : n > 0 ? `${n}-day streak` : 'A new fold every day';
-    this.game.loadDaily(dailyLevel(today), sub);
+    this.game.loadDaily(dailyLevel(today), this.dailySubtitle());
     this.game.button('daily')?.setIcon('back');
   }
 
@@ -850,7 +943,11 @@ export class GameSystem extends createSystem({
     const code = encodeFolds(folds);
     const n = this.addCustom(code);
     sfx.badge();
-    this.game.say(`Saved as My puzzle ${n}  ·  code ${formatCode(code)}`, 6);
+    this.game.say(`Saved as My puzzle ${n}  ·  ${this.shortLink(code)}`, 6);
+  }
+
+  private shortLink(code: string): string {
+    return `${location.host}${location.pathname}?p=${code}`;
   }
 
   /** Adds a puzzle code (once) and returns its number in My puzzles. */
@@ -919,7 +1016,10 @@ export class GameSystem extends createSystem({
     this.game.setLeftHanded(state.leftHanded);
     this.game.setReduceMotion(state.reduceMotion);
     this.zoo.setReduceMotion(state.reduceMotion);
-    if (state.reduceMotion) this.title.stop();
+    if (state.reduceMotion) {
+      this.title.stop();
+      if (this.demo?.lesson) this.endInspect();
+    }
     this.game.setHighContrast(state.highContrast);
   }
 
@@ -935,6 +1035,8 @@ export class GameSystem extends createSystem({
 
   private saveSheet() {
     this.progress.sheet = this.game.isFree || this.game.solved ? null : serialiseSheet(this.game.level.id, this.game.playedFolds, this.game.wasHinted);
+    if (this.progress.sheet) this.progress.sheets = storeSheet(this.progress.sheets ?? [], this.progress.sheet);
+    else if (!this.game.isFree) this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== this.game.level.id);
     this.saveProgress();
   }
 
@@ -982,7 +1084,7 @@ export class GameSystem extends createSystem({
         this.progress.daily = [...days].sort((a, b) => a - b).slice(-120);
       } else {
         if (!this.progress.solved.includes(c.level.id)) this.progress.solved.push(c.level.id);
-        this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
+        if (c.level.world >= 0) this.progress.level = (this.game.levelIndex + 1) % LEVELS.length;
         this.progress.best ??= {};
         const before = totalStars(this.progress.best);
         this.progress.best[c.level.id] = mergeBest(this.progress.best[c.level.id], c.result);
@@ -992,7 +1094,7 @@ export class GameSystem extends createSystem({
         this.progress.worlds ??= [];
         const lines: string[] = [];
         c.worldDone = -1;
-        if (done && !this.progress.worlds.includes(w)) {
+        if (w >= 0 && done && !this.progress.worlds.includes(w)) {
           this.progress.worlds.push(w);
           c.worldDone = w;
           let s = 0;
@@ -1024,7 +1126,18 @@ export class GameSystem extends createSystem({
       );
     }
     // The first solve shows the room model as the creature leaves; let it finish.
-    if (c.t > c.nextAt && !(c.firstSolve && this.roomModel.showing)) {
+    if (c.t > c.nextAt && !(c.firstSolve && (this.roomModel.showing || (!this.settings.reduceMotion && this.zoo.isTravelling(c.level.creature))))) {
+      if (c.firstSolve && !c.inspected) {
+        c.inspected = true;
+        this.progress.inspectSeen = true;
+        this.saveProgress();
+        if (!this.settings.reduceMotion) {
+          this.inspect(c.level.creature, Math.max(0, LOOKS.indexOf(c.level.look)), 1, true);
+          this.game.say('Pinch to turn it. Pull with both hands to open it up.', INSPECT_SECONDS);
+          return;
+        }
+      }
+      if (c.firstSolve && this.demo) return;
       this.celebrate = null;
       this.lastLevel = c.level;
       if (!this.progress.titleSeen) {
@@ -1191,6 +1304,7 @@ export class GameSystem extends createSystem({
     setListener(this.ear, this.earFwd);
     this.game.update(delta, time);
     this.zoo.update(delta);
+    this.updateDelivery(delta);
     this.scan.update(delta);
     this.fitDesk();
     for (const c of this.galleryItems) c.update(delta);
@@ -1202,6 +1316,8 @@ const OLD_ORDER = ['crane', 'frog', 'boat', 'fish', 'fox', 'butterfly', 'rabbit'
 
 /** Brings an old save into the campaign: same next level, one star per solve. */
 export function migrate(p: Progress): Progress {
+  p.sheets = savedSheets(p.sheets, p.sheet);
+  p.inspectSeen ??= !!(p.solved?.length || p.daily?.length || Object.keys(p.best ?? {}).length);
   p.titleSeen ??= !!(p.solved?.length || p.daily?.length || Object.keys(p.best ?? {}).length);
   if (p.version === 2) return p;
   const next = LEVELS.findIndex((l) => l.id === OLD_ORDER[p.level]);
