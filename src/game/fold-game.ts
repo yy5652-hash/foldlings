@@ -48,6 +48,7 @@ import { Button, IconKind } from './button.js';
 import { CONTROL_GLASS, fadeTree, floatOverRoom, follow, LAYER, Surface } from './glass.js';
 import { Guide } from './guide.js';
 import { Result, scoreSolve } from './score.js';
+import { SavedSheet } from './resume.js';
 import { HandGrace, HandsMissing } from './hand-grace.js';
 import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
@@ -84,6 +85,8 @@ const NEAR_MARGIN = 0.025;
 export interface FoldGameEvents {
   onSolved?: (level: Level, paper: PaperState, boardRoot: Group, result: Result) => void;
   onRecenter?: () => void;
+  onOpened?: () => void;
+  onChanged?: () => void;
   onDaily?: () => void;
   onSound?: () => void;
   onMenu?: () => void;
@@ -127,6 +130,8 @@ export class FoldGame {
   private prefixes: Uint8Array[] = [];
   solved = false;
   inputLocked = false;
+  private paused = false;
+  private inputAfter = 0;
   isDaily = false;
   /** Free fold: no goal; the hint token saves the folds as a puzzle. */
   isFree = false;
@@ -217,7 +222,9 @@ export class FoldGame {
       this.handsTracked = false;
       this.pinchingHands.clear();
     });
-    world.onXRFrame((frame) => this.onXRFrame(frame));
+    world.onXRFrame((frame) => {
+      if (this.inputReady) this.onXRFrame(frame);
+    });
   }
 
   button(kind: IconKind): Button | undefined {
@@ -273,7 +280,7 @@ export class FoldGame {
     const b = new Button(
       kind,
       () => {
-        if (this.inputLocked || this.drag || this.settle) return;
+        if (!this.inputReady || this.inputLocked || this.drag || this.settle) return;
         unlockAudio();
         sfx.click();
         action();
@@ -348,10 +355,11 @@ export class FoldGame {
     }
     this.textures.setLook(level.look, seed);
     this.board.setGoal(this.targetFacets, level.look, level.name, subtitle, this.events.footer?.() ?? '', level.creature);
-    this.restart();
+    this.restart(false);
     this.drop = 0;
     if (this.reduceMotion) this.updateDrop(0);
     sfx.pick();
+    this.events.onOpened?.();
   }
 
   /** Teaching levels show the ghost fold on their own. */
@@ -418,7 +426,7 @@ export class FoldGame {
     return null;
   }
 
-  restart() {
+  restart(notify = true) {
     this.paper = initialPaper();
     this.history = [];
     this.creases = [];
@@ -439,6 +447,8 @@ export class FoldGame {
     this.played = [];
     this.board.setFoldCount(0, this.level.par);
     this.clearHints();
+    this.hidePaper(false);
+    if (notify) this.events.onChanged?.();
   }
 
   private clearHints() {
@@ -460,6 +470,7 @@ export class FoldGame {
     this.solved = false;
     this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
+    this.events.onChanged?.();
   }
 
   /** Each press gives a little more: the corner, then the crease, then a demonstration. */
@@ -469,6 +480,7 @@ export class FoldGame {
       return;
     }
     this.hinted = true;
+    this.events.onChanged?.();
     const next = this.nextFold();
     const pts = next ? this.nextFoldPoints() : null;
     if (next && pts) {
@@ -572,8 +584,24 @@ export class FoldGame {
     return best;
   }
 
+  get canFold(): boolean {
+    return this.canStart();
+  }
+
+  get paperVisible(): boolean {
+    return this.paperView.root.visible;
+  }
+
+  get wasHinted(): boolean {
+    return this.hinted;
+  }
+
+  private get inputReady(): boolean {
+    return !this.paused && performance.now() / 1000 >= this.inputAfter;
+  }
+
   private canStart(): boolean {
-    return !this.inputLocked && !this.solved && !this.settle && this.drop < 0;
+    return this.inputReady && this.paperVisible && !this.inputLocked && !this.solved && !this.settle && this.drop < 0;
   }
 
   private onSelectStart(e: XRInputSourceEvent) {
@@ -946,7 +974,7 @@ export class FoldGame {
     this.commitFold(s.snap);
   }
 
-  private commitFold(snap: Snap) {
+  private commitFold(snap: Snap, silent = false) {
     const next = foldPaper(this.paper, snap.line, snap.s);
     if (!next) {
       this.paperView.setPaper(this.paper);
@@ -971,6 +999,8 @@ export class FoldGame {
     this.paperView.setPaper(this.paper);
     this.board.setFoldCount(this.folds, this.level.par);
     this.clearHints();
+    if (silent) return;
+    this.events.onChanged?.();
     sfx.fold();
     const match = this.isFree ? 0 : bestMatch(rasterize(this.paper), this.targets);
     if (match < 0.999 && match >= 0.85 && this.folds >= this.level.par + 1) {
@@ -986,6 +1016,41 @@ export class FoldGame {
       sfx.solved();
       this.events.onSolved?.(this.level, this.paper, this.boardRoot, scoreSolve(this.folds, this.level.par, this.hinted));
     }
+  }
+
+  /** Restore through the same bookkeeping as a committed fold, without effects. */
+  restoreSheet(sheet: SavedSheet) {
+    for (const fold of sheet.played) {
+      this.commitFold({ ...fold, line: creaseLine(fold), error: 0 }, true);
+    }
+    this.hinted = sheet.hinted;
+    this.readyPaper();
+  }
+
+  /** Placement is immediately playable, even if the new-sheet drop was pending. */
+  readyPaper() {
+    this.drop = -1;
+    if (!this.solved) this.hidePaper(false);
+    this.paperView.root.rotation.set(0, 0, 0);
+  }
+
+  pause() {
+    this.paused = true;
+    if (this.drag?.kind === 'ray') this.board.hitPlane.releasePointerCapture?.(this.drag.pointerId);
+    if (this.drag) this.endDrag(true);
+    // Drop an unfinished settle; committed folds already live in history.
+    this.settle = null;
+    this.handGrace.reset();
+    this.pinchingHands.clear();
+    this.paperView.setPaper(this.paper);
+    this.board.showCrease(null);
+    this.board.setMeasure(null, 0, 0, false);
+    for (const cursor of this.cursors) cursor.visible = false;
+  }
+
+  resume() {
+    this.paused = false;
+    this.inputAfter = performance.now() / 1000 + 0.5;
   }
 
   /** True while a fold is being made or animated. */

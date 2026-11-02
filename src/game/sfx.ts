@@ -4,10 +4,13 @@
  */
 
 let ctx: AudioContext | null = null;
+let suspended = false;
+let musicWanted = false;
 let master: GainNode | null = null;
 let noise: AudioBuffer | null = null;
 
 function audio(): AudioContext | null {
+  if (suspended) return null;
   if (ctx) return ctx;
   const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return null;
@@ -341,6 +344,7 @@ function pluck(freq: number, when: number, gain: number) {
 
 /** Soft generative koto-like notes with an echo; very quiet. */
 export function startMusic() {
+  musicWanted = true;
   const a = audio();
   if (!a || !master || musicTimer !== null) return;
   if (!musicBus) {
@@ -375,8 +379,23 @@ export function startMusic() {
 }
 
 export function stopMusic() {
+  musicWanted = false;
   if (musicTimer !== null) window.clearInterval(musicTimer);
   musicTimer = null;
+}
+
+/** Freeze the shared audio clock, including notes already scheduled. */
+export function suspendAudio() {
+  suspended = true;
+  if (musicTimer !== null) window.clearInterval(musicTimer);
+  musicTimer = null;
+  if (ctx && ctx.state !== 'closed') void ctx.suspend().catch(() => {});
+}
+
+export function resumeAudio() {
+  suspended = false;
+  if (ctx && ctx.state !== 'closed') void ctx.resume().catch(() => {});
+  if (musicWanted) startMusic();
 }
 
 export function setMuted(m: boolean) {

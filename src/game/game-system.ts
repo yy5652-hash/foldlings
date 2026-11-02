@@ -20,9 +20,11 @@ import {
   RayInteractable,
 } from '@iwsdk/core';
 import { FoldSpec, paperBounds } from '../fold/paper.js';
+import { Pause } from './pause.js';
+import { SavedSheet, serialiseSheet, validateSheet } from './resume.js';
 import { FoldGame } from './fold-game.js';
 import { CreatureKind, customLevel, dailyLevel, dayNumber, FREE_LEVEL, Level, LEVELS, LOOKS, PER_WORLD, WORLDS } from './levels.js';
-import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic } from './sfx.js';
+import { audioContext, audioDestination, isMuted, setListener, setMuted, sfx, startMusic, stopMusic, suspendAudio, resumeAudio } from './sfx.js';
 import { ACHIEVEMENTS, AchievementStats, newlyEarned } from './achievements.js';
 import { Album } from './album.js';
 import { BadgePop } from './badge.js';
@@ -87,6 +89,8 @@ interface Progress {
   /** Day numbers on which the daily fold was solved. */
   daily?: number[];
   muted?: boolean;
+  titleSeen?: boolean;
+  sheet?: SavedSheet | null;
 }
 
 /** How far the real room stays dimmed while the projection is running. */
@@ -119,6 +123,7 @@ export class GameSystem extends createSystem({
     t: number;
     level: Level;
     revealed: boolean;
+    firstSolve: boolean;
     vanished: boolean;
     where: string;
     sayAt: number;
@@ -160,7 +165,13 @@ export class GameSystem extends createSystem({
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
   private alwaysGhostHands = false;
-  private titleShown = false;
+  private titleQueued = false;
+  private titleOnMat = false;
+  private pendingResult: GameSystem['celebrate'] = null;
+  private foldReadyAt: number | null = null;
+  private awakeAt: number | null = null;
+  private pause = new Pause();
+  private paused = false;
   private earFwd = new Vector3();
   private galleryItems: Creature[] = [];
   private vroom!: VirtualRoom;
@@ -208,9 +219,17 @@ export class GameSystem extends createSystem({
     this.zoo.hands = this.hands;
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
+      onOpened: () => {
+        const sheet = validateSheet(this.progress.sheet);
+        if (sheet?.id === this.game.level.id) this.game.restoreSheet(sheet);
+        this.saveSheet();
+      },
+      onChanged: () => this.saveSheet(),
       onSolved: (level, _paper, _root, result) => {
+        this.progress.sheet = null;
+        this.saveProgress();
         this.zoo.cheer();
-        this.celebrate = { t: 0, level, revealed: false, vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
+        this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.titleSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
       },
       onDaily: () => this.toggleDaily(),
       footer: () => {
@@ -229,6 +248,9 @@ export class GameSystem extends createSystem({
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
     this.world.createTransformEntity(this.badge.root, this.game.boardEntity);
     this.badge.root.position.set(0, 0.36, -0.12);
+    this.zoo.onAwake = () => {
+      if (this.awakeAt === null && this.sessionTime >= 0) this.awakeAt = this.sessionTime;
+    };
     this.zoo.onPalmRide = () => this.count('palm');
     this.zoo.onWave = () => this.count('waves');
     this.levelSelect = new LevelSelect(this.world, {
@@ -282,10 +304,16 @@ export class GameSystem extends createSystem({
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
     this.game.boardRoot.add(this.title.paper);
-    this.title.onGathered = () => this.game.hidePaper(false);
+    this.title.onGathered = () => {
+      if (this.titleOnMat && !this.game.solved) this.game.hidePaper(false);
+    };
     this.title.onFinished = () => {
       this.game.setStage(true);
       this.stage.dismiss();
+      this.titleOnMat = false;
+      const result = this.pendingResult;
+      this.pendingResult = null;
+      if (result) this.showResult(result);
     };
     this.world.scene.add(this.dimmer.mesh);
     this.handBodies = new HandBodies(this.world);
@@ -305,7 +333,16 @@ export class GameSystem extends createSystem({
       setMuted(true);
       this.game.button('sound')?.setIcon('mute');
     }
-    this.game.loadLevel(this.progress.level);
+    const sheet = validateSheet(this.progress.sheet);
+    this.progress.sheet = sheet;
+    const campaign = sheet ? LEVELS.findIndex((l) => l.id === sheet.id) : -1;
+    if (sheet?.id === dailyLevel().id) {
+      this.game.loadDaily(dailyLevel(), 'A new fold every day');
+      this.game.button('daily')?.setIcon('back');
+    } else if (sheet?.id.startsWith('my-')) {
+      const code = sheet.id.slice(3);
+      this.game.loadCustom(customLevel(code, (this.progress.custom ?? []).indexOf(code)), `My puzzles  ·  ${formatCode(code)}`);
+    } else this.game.loadLevel(campaign >= 0 ? campaign : this.progress.level);
     // A shared link (?p=CODE) opens that puzzle straight away and keeps it.
     const shared = new URLSearchParams(location.search).get('p');
     const sharedFolds = shared ? decodeFolds(shared) : null;
@@ -350,11 +387,28 @@ export class GameSystem extends createSystem({
           })),
         menu: () => this.menu,
         progress: () => this.progress,
+        firstRun: () => ({
+          sessionTime: this.sessionTime,
+          placed: !!this.placed,
+          canFold: this.game.canFold,
+          paperVisible: this.game.paperVisible,
+          scanActive: this.scan.active,
+          modelShowing: this.roomModel.showing,
+          titlePlaying: this.title.playing,
+          titleSeen: !!this.progress.titleSeen,
+          foldReadyAt: this.foldReadyAt,
+          awakeAt: this.awakeAt,
+        }),
+        resetFirstRun: () => {
+          this.progress.titleSeen = false;
+          this.progress.sheet = null;
+          this.saveProgress();
+        },
         room: () => this.room,
         levels: (w = -1) => this.openLevels(w),
         book: () => this.levelSelect,
         skipTitle: () => {
-          this.titleShown = true;
+          this.titleQueued = false;
           this.title.stop();
         },
         album: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()),
@@ -362,7 +416,7 @@ export class GameSystem extends createSystem({
         inspect: (kind: CreatureKind = 'crane', look = 0, times = 3) => this.inspect(kind, look, times),
         inspectEnd: () => this.endInspect(),
         replayTitle: () => {
-          this.titleShown = false;
+          this.titleQueued = true;
         },
         /** A well-played save, for filming the menus with something in them. */
         filmNoHands: (on: boolean) => this.handBodies.hideAll(on),
@@ -411,10 +465,29 @@ export class GameSystem extends createSystem({
         },
       };
     }
+    const playable = (state: VisibilityState) => state === VisibilityState.Visible || state === VisibilityState.NonImmersive;
+    let visible = true;
+    this.cleanupFuncs.push(this.world.visibilityState.subscribe((state) => {
+      const next = playable(state);
+      const action = this.pause.transition(visible, next, performance.now() / 1000);
+      visible = next;
+      if (action === 'pause') {
+        this.paused = true;
+        suspendAudio();
+        this.game.pause();
+      } else if (action === 'resume' || action === 'remind') {
+        this.paused = false;
+        resumeAudio();
+        this.game.resume();
+        if (action === 'remind') this.game.say('Picked up where you left off', 3);
+      }
+    }));
     this.world.renderer.xr.addEventListener('sessionstart', () => {
       startMusic();
       this.sessionTime = 0;
-      this.titleShown = false;
+      this.lastScan = -10;
+      this.foldReadyAt = null;
+      this.awakeAt = null;
       this.occluderKey = '';
       // Panels left open in another mode would float in the wrong place.
       this.menu.close();
@@ -447,7 +520,6 @@ export class GameSystem extends createSystem({
     this.stage.setCallout(1, this.roomModel.root, [-0.1, 0, 0], -0.2, 0.02, `${this.roomModel.count} SURFACES`, 'READ JUST NOW');
     this.roomModelOn = true;
   }
-  private modelIn = -1;
   private roomModelOn = false;
 
   /** Labels, slice and vitals around a creature on the projection table. */
@@ -488,12 +560,12 @@ export class GameSystem extends createSystem({
         }
       }
       this.wasAwake = p.awake;
-      if (p.left < 0.8) this.stage.dismiss();
+      if (p.left < 0.8 && !this.roomModel.showing && !this.title.playing) this.stage.dismiss();
     } else if (this.presented) {
       this.presented.setPresenting(false);
       this.presented = null;
       this.wasAwake = false;
-      this.stage.dismiss();
+      if (!this.roomModel.showing && !this.title.playing) this.stage.dismiss();
     }
   }
   private presented: Creature | null = null;
@@ -662,13 +734,14 @@ export class GameSystem extends createSystem({
     this.moveT = 0;
     this.placed = next;
     this.matSaved = false;
-    // Show what the headset sees of the room while the mat finds its spot.
+    this.game.readyPaper();
+    this.recordFoldReady();
+    // Sweep the room in the background while folding is already available.
     if (this.mode === 'ar' && (force || this.sessionTime - this.lastScan > 3)) {
       const surfaces = this.roomSurfaces();
       if (surfaces.length) {
         this.lastScan = this.sessionTime;
         this.scan.start(surfaces, head.getWorldPosition(new Vector3()), next.onSurface ? next.position : null);
-        this.modelIn = this.settings.reduceMotion ? -1 : 1.3;
       }
     }
     console.info(
@@ -711,6 +784,10 @@ export class GameSystem extends createSystem({
     this.placed = { position, yaw: this.yawTo, onSurface: m.onSurface, label: 'remembered' };
     this.matSaved = true;
     root.position.copy(this.moveFrom);
+    // Back in a known room: no sweep, straight to the paper.
+    this.lastScan = this.sessionTime;
+    this.game.readyPaper();
+    this.recordFoldReady();
     this.game.say('Your mat is right where you left it', 3);
     console.info('[foldlings] mat restored:', position.toArray().map((v) => v.toFixed(2)).join(', '));
   }
@@ -849,6 +926,29 @@ export class GameSystem extends createSystem({
     return this.game.boardRoot.getWorldPosition(new Vector3());
   }
 
+  private recordFoldReady() {
+    if (this.foldReadyAt === null && this.sessionTime >= 0 && this.placed && this.game.paperVisible && this.game.canFold) {
+      this.foldReadyAt = this.sessionTime;
+    }
+  }
+
+  private saveSheet() {
+    this.progress.sheet = this.game.isFree || this.game.solved ? null : serialiseSheet(this.game.level.id, this.game.playedFolds, this.game.wasHinted);
+    this.saveProgress();
+  }
+
+  private playTitle(onMat: boolean) {
+    this.titleOnMat = onMat;
+    this.game.boardRoot.updateWorldMatrix(true, false);
+    this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
+    this.title.root.lookAt(this.world.camera.getWorldPosition(this.ear));
+    if (onMat) this.game.hidePaper(true);
+    this.game.setStage(false);
+    this.stage.present(0.05, 0.3);
+    sfx.power();
+    this.title.play(this.game.level.look.front);
+  }
+
   private saveProgress() {
     safeSet(PROGRESS_KEY, JSON.stringify(this.progress));
   }
@@ -910,6 +1010,7 @@ export class GameSystem extends createSystem({
     }
     if (c.t > c.sayAt) {
       c.sayAt = Infinity;
+      if (c.firstSolve && !this.settings.reduceMotion) this.showRoomModel();
       const name = c.level.creature;
       const swims = name === 'fish' || name === 'whale';
       this.game.say(
@@ -921,20 +1022,32 @@ export class GameSystem extends createSystem({
         4,
       );
     }
-    if (c.t > c.nextAt) {
+    // The first solve shows the room model as the creature leaves; let it finish.
+    if (c.t > c.nextAt && !(c.firstSolve && this.roomModel.showing)) {
       this.celebrate = null;
       this.lastLevel = c.level;
-      const sub =
-        c.level.world === -1
-          ? 'Daily Fold'
-          : c.level.world < 0
-            ? `My puzzles  ·  ${formatCode(c.level.id.replace(/^my-/, ''))}`
-            : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
-      this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id], c.banner ?? '');
+      if (!this.progress.titleSeen) {
+        this.progress.titleSeen = true;
+        this.saveProgress();
+        if (!this.settings.reduceMotion) {
+          this.pendingResult = c;
+          this.playTitle(false);
+        } else this.showResult(c);
+      } else this.showResult(c);
       if (c.worldDone !== undefined && c.worldDone >= 0 && !this.settings.reduceMotion) {
         this.zoo.parade(WORLDS[c.worldDone].kind, c.level.look.front);
       }
     }
+  }
+
+  private showResult(c: NonNullable<GameSystem['celebrate']>) {
+    const sub =
+      c.level.world === -1
+        ? 'Daily Fold'
+        : c.level.world < 0
+          ? `My puzzles  ·  ${formatCode(c.level.id.replace(/^my-/, ''))}`
+          : `${WORLDS[c.level.world].name} world  ·  ${c.level.slot + 1} / ${PER_WORLD}`;
+    this.resultCard.show(c.level.name, sub, c.result, this.progress.best?.[c.level.id], c.banner ?? '');
   }
 
   /** The level book, open on `world` when it is unlocked. */
@@ -963,7 +1076,7 @@ export class GameSystem extends createSystem({
   }
 
   update(delta: number, time: number): void {
-    if (this.world.visibilityState.peek() === VisibilityState.VisibleBlurred) return;
+    if (this.paused) return;
     delta = Math.min(delta, 0.1);
     const frame = this.world.session ? this.world.renderer.xr.getFrame() : null;
     this.room.update(frame, delta);
@@ -991,6 +1104,10 @@ export class GameSystem extends createSystem({
         this.surfaceClock = 1;
         const surfaces = this.roomSurfaces();
         this.zoo.setSurfaces(surfaces);
+        if (this.placed && this.lastScan < 0 && surfaces.length) {
+          this.lastScan = this.sessionTime;
+          this.scan.start(surfaces, this.player.head.getWorldPosition(this.ear), this.placed.onSurface ? this.placed.position : null);
+        }
         // No room scan: say so once, so the floating mat is not a surprise.
         if (!this.scanHinted && this.sessionTime > 6 && surfaces.length === 0) {
           this.scanHinted = true;
@@ -1025,17 +1142,10 @@ export class GameSystem extends createSystem({
       }
     }
     if (this.celebrate) this.updateCelebration(delta);
-    // The title unfolds once the mat has settled after the room scan.
-    if (!this.settings.reduceMotion && !this.titleShown && this.sessionTime > 1 && this.moveT >= 1 && !this.scan.active && !this.roomModel.showing && this.modelIn <= 0) {
-      this.titleShown = true;
-      this.game.boardRoot.updateWorldMatrix(true, false);
-      this.title.root.position.set(0, 0.2, -0.17).applyMatrix4(this.game.boardRoot.matrixWorld);
-      this.title.root.lookAt(this.world.camera.getWorldPosition(this.ear));
-      this.game.hidePaper(true);
-      this.game.setStage(false);
-      this.stage.present(0.05, 0.3);
-      sfx.power();
-      this.title.play(this.game.level.look.front);
+    this.recordFoldReady();
+    if (this.titleQueued && this.sessionTime > 1 && this.moveT >= 1 && !this.title.playing) {
+      this.titleQueued = false;
+      this.playTitle(true);
     }
     this.title.update(delta);
     this.handBodies.update(delta);
@@ -1045,10 +1155,6 @@ export class GameSystem extends createSystem({
     tickHolo(delta);
     this.stage.update(delta);
     this.roomModel.update(delta);
-    if (this.modelIn > 0) {
-      this.modelIn -= delta;
-      if (this.modelIn <= 0) this.showRoomModel();
-    }
     this.updateDemo(delta);
     this.inspectClose.update(delta);
     this.updatePresentation(delta);
@@ -1094,6 +1200,7 @@ const OLD_ORDER = ['crane', 'frog', 'boat', 'fish', 'fox', 'butterfly', 'rabbit'
 
 /** Brings an old save into the campaign: same next level, one star per solve. */
 export function migrate(p: Progress): Progress {
+  p.titleSeen ??= !!(p.solved?.length || p.daily?.length || Object.keys(p.best ?? {}).length);
   if (p.version === 2) return p;
   const next = LEVELS.findIndex((l) => l.id === OLD_ORDER[p.level]);
   const best: Record<string, Best> = {};

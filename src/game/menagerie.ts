@@ -228,6 +228,7 @@ export class Menagerie {
   hands: Hands | null = null;
   /** While the player folds, nearby creatures watch the paper. */
   watch: Vector3 | null = null;
+  onAwake: (() => void) | null = null;
   /** A creature hopped onto a palm / the zoo answered a wave. */
   onPalmRide: (() => void) | null = null;
   onWave: (() => void) | null = null;
@@ -660,6 +661,7 @@ export class Menagerie {
       }
       if (!tr.woke && !l.c.folding && since > LIFT) {
         tr.woke = true;
+        this.onAwake?.();
         const at = root.getWorldPosition(this.tmp);
         if (!this.reduceMotion) {
           this.confetti.burst(at, LOOKS[l.saved.look % LOOKS.length].front);
