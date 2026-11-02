@@ -12,6 +12,8 @@ export const patterns = [
   () => import('./whale.js').then(m => m.whale()),
   () => import('./fox.js').then(m => m.fox()),
   () => import('./rabbit.js').then(m => m.rabbit()),
+  () => import('./butterfly.js').then(m => m.butterfly()),
+  () => import('./boat.js').then(m => m.boat()),
 ];
 
 /** Rigid frame taking the original sheet plane to a final face. */
