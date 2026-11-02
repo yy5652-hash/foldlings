@@ -7,6 +7,13 @@ export class ViewFov {
   projection: Float32Array | null = null;
   private sampled = false;
 
+  /** Dev only: the emulator masks its view but reports a wide projection. */
+  force(angles: ViewAngles) {
+    this.sampled = true;
+    this.angles = angles;
+    this.mode = classifyView(angles);
+  }
+
   constructor(world: World) {
     world.renderer.xr.addEventListener('sessionend', () => {
       this.sampled = false;

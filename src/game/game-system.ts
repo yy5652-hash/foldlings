@@ -359,6 +359,7 @@ export class GameSystem extends createSystem({
       // Test hook: board point (u, v, height) → world position.
       (window as unknown as Record<string, unknown>).__foldlings = {
         fov: () => viewFov(this.world),
+        forceFov: (left = 37, right = 37, up = 25, down = 43) => viewFov(this.world).force({ left, right, up, down }),
         game: this.game,
         zoo: this.zoo,
         world: this.world,
