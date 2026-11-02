@@ -4,6 +4,7 @@
  * everything every frame.
  */
 
+import { viewFov } from './view-fov.js';
 import {
   NeutralToneMapping,
   Color,
@@ -287,14 +288,11 @@ export class GameSystem extends createSystem({
     this.settingsPanel = new SettingsPanel(this.world, this.settings, (state) => {
       this.applySettings(state);
       saveSettings(state);
-    });
+    }, { sound: () => !isMuted(), toggleSound: () => this.toggleSound(), restart: () => this.game.restart(), moveMat: () => this.place(true) });
     this.menu = new PalmMenu(this.world, [
       { icon: 'levels', label: 'Levels', run: () => this.openLevels(this.game.level.world) },
       { icon: 'album', label: 'Album', run: () => this.album.show(this.zoo.collection(), this.streak(), this.world.camera, this.badgeEntries()) },
-      { icon: 'daily', label: 'Daily fold', run: () => this.toggleDaily() },
-      { icon: 'restart', label: 'Restart', run: () => this.game.restart() },
-      { icon: 'sound', label: 'Sound', run: () => this.toggleSound() },
-      { icon: 'recenter', label: 'Move mat', run: () => this.place(true) },
+      { icon: 'daily', label: 'Daily Fold', run: () => this.toggleDaily() },
       { icon: 'settings', label: 'Settings', run: () => {
         this.album.hide();
         this.settingsPanel.open();
@@ -360,6 +358,7 @@ export class GameSystem extends createSystem({
     if (import.meta.env.DEV) {
       // Test hook: board point (u, v, height) → world position.
       (window as unknown as Record<string, unknown>).__foldlings = {
+        fov: () => viewFov(this.world),
         game: this.game,
         zoo: this.zoo,
         world: this.world,
@@ -1159,6 +1158,7 @@ export class GameSystem extends createSystem({
     this.updateDemo(delta);
     this.inspectClose.update(delta);
     this.updatePresentation(delta);
+    this.game.board.setDecorationStrength(this.title.playing || this.presented || this.demo || this.roomModel.showing ? 1 : 0.4);
     if (this.roomModelOn && !this.roomModel.showing) {
       this.roomModelOn = false;
       if (!this.demo && !this.title.playing) this.stage.dismiss();

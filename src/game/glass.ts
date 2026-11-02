@@ -8,6 +8,8 @@
  * the way a browser composites CSS.
  */
 
+import { fitPanel } from './fov.js';
+import { viewFov } from './view-fov.js';
 import {
   BufferGeometry,
   CanvasTexture,
@@ -328,8 +330,18 @@ export function contentTexture(c: HTMLCanvasElement): CanvasTexture {
   return t;
 }
 
+const textMetres = new WeakMap<CanvasRenderingContext2D, number>();
+
 export function setFont(g: CanvasRenderingContext2D, px: number, weight = 500, tracking = 0, family = MONO) {
   g.font = `${weight} ${px}px ${family}`;
+  const metres = textMetres.get(g);
+  if (metres) {
+    const metrics = g.measureText('H');
+    const cap = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    if (cap > 0 && cap * metres < 0.008) {
+      g.font = `${weight} ${Math.ceil(px * 0.008 / (cap * metres))}px ${family}`;
+    }
+  }
   g.letterSpacing = `${tracking}px`;
   g.fontKerning = 'normal';
   g.textRendering = 'geometricPrecision';
@@ -394,10 +406,16 @@ export class TextLabel {
     order = LAYER.text,
     private family = MONO,
   ) {
+    this.h = Math.max(h, 0.018);
     this.canvas.width = 8;
     this.canvas.height = Math.ceil(px * 1.5);
+    const g = this.canvas.getContext('2d')!;
+    setFont(g, px, weight, 0, family);
+    const metrics = g.measureText('H');
+    const cap = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    if (cap > 0) this.h = Math.max(this.h, 0.008 * this.canvas.height / cap);
     this.tex = contentTexture(this.canvas);
-    this.surface = new Surface({ w: h, h, r: 0, body: 0, map: this.tex, order });
+    this.surface = new Surface({ w: this.h, h: this.h, r: 0, body: 0, map: this.tex, order });
     this.surface.mesh.name = 'Label';
   }
 
@@ -536,6 +554,7 @@ export class GlassWindow {
   private ticking: Ticking[] = [];
   private head = new Vector3();
   private fwd = new Vector3();
+  private up = new Vector3();
 
   private hits: HitArea[] = [];
   private slab: LineSegments<BufferGeometry> | null = null;
@@ -563,9 +582,13 @@ export class GlassWindow {
     const r = opts.r ?? 0.004;
     if (this.px) {
       this.canvas = document.createElement('canvas');
-      this.canvas.width = this.px;
-      this.canvas.height = this.py;
+      const density = Math.max(this.px / this.w, 3200);
+      this.canvas.width = Math.ceil(this.w * density);
+      this.canvas.height = Math.ceil(this.h * density);
+      if (this.canvas.width > 2048 || this.canvas.height > 2048) throw new Error('Window texture exceeds 2048 pixels');
       this.g = this.canvas.getContext('2d')!;
+      this.g.scale(this.canvas.width / this.px, this.canvas.height / this.py);
+      textMetres.set(this.g, this.w / this.px);
       this.tex = contentTexture(this.canvas);
     }
     const glass = opts.glass !== false;
@@ -638,7 +661,21 @@ export class GlassWindow {
     if (this.fwd.lengthSq() < 1e-4) this.fwd.set(0, 0, -1);
     this.fwd.normalize();
     this.root.position.copy(this.head).addScaledVector(this.fwd, distance);
-    this.root.position.y -= drop;
+    this.root.scale.setScalar(1);
+    this.root.up.set(0, 1, 0);
+    const view = viewFov(this.world);
+    if (view.mode === 'narrow' && view.angles) {
+      // Include controls just beyond the lower edge, such as Close.
+      const fit = fitPanel(this.w, this.h + 0.1, distance, view.angles);
+      this.root.scale.setScalar(fit.scale);
+      camera.getWorldDirection(this.fwd);
+      this.up.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      this.root.up.copy(this.up);
+      const pitch = fit.pitch;
+      this.root.position.copy(this.head).addScaledVector(this.fwd, distance * Math.cos(pitch * Math.PI / 180));
+      this.root.position.addScaledVector(this.up, -distance * Math.sin(pitch * Math.PI / 180));
+    } else this.root.position.y -= drop;
+    this.root.parent?.worldToLocal(this.root.position);
     this.root.lookAt(this.head);
     this.show();
   }

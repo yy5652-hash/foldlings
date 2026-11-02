@@ -337,9 +337,12 @@ export class LevelSelect {
       const height = t.h * W / PX;
       const hit = { minX: x - width / 2, maxX: x + width / 2, minY: y - height / 2, maxY: y + height / 2 };
       const canvas = document.createElement('canvas');
-      canvas.width = t.w;
-      canvas.height = t.h;
-      canvas.getContext('2d')!.drawImage(this.win.canvas!, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
+      const source = this.win.canvas!;
+      const sx = source.width / PX;
+      const sy = source.height / this.win.py;
+      canvas.width = Math.ceil(t.w * sx);
+      canvas.height = Math.ceil(t.h * sy);
+      canvas.getContext('2d')!.drawImage(source, t.x * sx, t.y * sy, t.w * sx, t.h * sy, 0, 0, canvas.width, canvas.height);
       const surface = new Surface({ w: width, h: height, r: 0.004, map: contentTexture(canvas), order: LAYER.control });
       surface.mesh.position.set(x, y, 0.004);
       surface.mesh.visible = false;
