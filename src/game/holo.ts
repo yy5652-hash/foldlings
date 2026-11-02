@@ -111,7 +111,7 @@ export function holoBody(): ShaderMaterial {
     uniforms: {
       uTime: HOLO_TIME,
       uExplode: { value: 0 },
-      uThick: { value: 0.0058 },
+      uThick: { value: 0.0016 },
       uScanY: { value: -99 },
       uReveal: { value: 99 },
       uGlow: { value: 1 },
@@ -235,7 +235,7 @@ varying float vA;
 void main() {
   // Each point hangs near the surface and breathes around its place.
   float ph = aDrift.x * 6.283;
-  vec3 p = position + normal * (uExplode * (0.4 + aDrift.y) + (aDrift.y - 0.5) * 0.012 + sin(uTime * 0.8 + ph) * 0.0016);
+  vec3 p = position + normal * (uExplode * (0.4 + aDrift.y) + (aDrift.y - 0.5) * 0.002 + sin(uTime * 0.8 + ph) * 0.0004);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   vC = pow(color, vec3(0.4545));
   vA = 0.3 + 0.7 * pow(0.5 + 0.5 * sin(uTime * (0.7 + aDrift.z * 1.8) + ph), 3.0);
