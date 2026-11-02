@@ -87,6 +87,7 @@ interface Settle {
 
 const NEAR_HEIGHT = 0.09;
 const GRIP_HEIGHT = 0.05;
+const PINCH_ON_PAPER = 0.04;
 const NEAR_MARGIN = 0.025;
 
 export interface FoldGameEvents {
@@ -162,6 +163,7 @@ export class FoldGame {
   handBodies?: HandBodies;
   private grips = { left: new Grip(), right: new Grip() };
   private sourceGap = 0;
+  private pinchedPaperAt = -1;
   private gripTracked = { left: false, right: false };
   private reverse: ReturnType<typeof unfoldFlap> = null;
   private handGrace = new HandGrace();
@@ -294,6 +296,7 @@ export class FoldGame {
       kind,
       () => {
         if (!this.inputReady || this.inputLocked || this.drag || this.settle) return;
+        if (this.pinchedPaperAt >= 0 && this.time - this.pinchedPaperAt < 0.4) return;
         unlockAudio();
         sfx.click();
         action();
@@ -806,9 +809,11 @@ export class FoldGame {
       if (!world || !grip) continue;
       if (source.handedness !== 'none') this.gripTracked[source.handedness] = true;
       const hand = this.toBoard(world, this.cursorHand);
+      const p = hand.h >= -0.03 && hand.h <= NEAR_HEIGHT ? this.grabPoint(hand) : null;
+      // A pinch made on the paper must not also click whatever its ray points at.
+      if (p && this.sourceGap < PINCH_ON_PAPER) this.pinchedPaperAt = this.time;
       // Not yet a full pinch, so ask for a hand close to the paper.
-      const p = hand.h >= -0.03 && hand.h <= GRIP_HEIGHT ? this.grabPoint(hand) : null;
-      const near = !!p && this.canStart();
+      const near = !!p && hand.h <= GRIP_HEIGHT && this.canStart();
       const eligible = !this.drag || (this.drag.source?.handedness === source.handedness &&
         (this.drag.grip || (this.drag.kind === 'ray' && this.time - this.drag.startedAt < 0.15)));
       const action = grip.update(this.sourceGap, near && eligible);
