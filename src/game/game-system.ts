@@ -289,6 +289,7 @@ export class GameSystem extends createSystem({
     };
     this.world.scene.add(this.dimmer.mesh);
     this.handBodies = new HandBodies(this.world);
+    this.game.handBodies = this.handBodies;
     this.stage = new HoloStage(this.world);
     this.game.boardRoot.add(this.stage.root);
     this.world.scene.add(this.stage.labels);
@@ -1069,9 +1070,9 @@ export class GameSystem extends createSystem({
     this.menu.blocked = this.game.busy;
     this.menu.update(delta, this.world.renderer.xr.isPresenting);
     this.album.update(delta);
-    this.resultCard.update(delta);
+    this.resultCard.update(delta, this.handBodies.pinch);
     this.badge.update(delta);
-    this.levelSelect.update(delta);
+    this.levelSelect.update(delta, this.handBodies.pinch);
     this.settingsPanel.update(delta);
     this.game.board.setCardAway(
       this.title.playing || !!this.celebrate || !!this.demo || this.roomModel.showing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
