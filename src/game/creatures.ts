@@ -4,7 +4,7 @@
  * their own voice, and can fold themselves up out of a flat sheet.
  */
 
-import { Box3, Color, Euler, Group, LineSegments, Mesh, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
+import { Box3, Color, Euler, Group, LineSegments, Mesh, MeshBasicMaterial, Object3D, Quaternion, Vector3 } from '@iwsdk/core';
 import { buildRig, type Rig } from './creature-models.js';
 import { HoloVolume } from './holo-volume.js';
 import type { CreatureKind } from './levels.js';
@@ -22,6 +22,11 @@ export const HABITAT: Record<CreatureKind, Habitat> = {
   boat: 'ground',
   rabbit: 'ground',
   whale: 'high-air',
+};
+
+/** Largest resting span in centimetres, folded from a 20 cm sheet. */
+export const REAL_SPAN: Record<CreatureKind, number> = {
+  crane: 15, frog: 9, fox: 10, fish: 12, butterfly: 12, boat: 14, rabbit: 10, whale: 14,
 };
 
 /** Seconds per fold-up beat; the body opens on beat 0, parts on 1–3. */
@@ -44,6 +49,8 @@ export class Creature {
   private detailed = true;
   readonly kind: CreatureKind;
   private rig: Rig;
+  private modelSpan: number;
+  private scanScale: number;
   private t = Math.random() * 10;
   private react = 0;
   private hop = 0;
@@ -67,8 +74,14 @@ export class Creature {
     this.kind = kind;
     this.root.name = `Creature_${kind}`;
     this.rig = buildRig(kind, paperLook.front, paperLook.back);
+    const bounds = new Box3().setFromObject(this.rig.body);
+    const size = bounds.getSize(this.v);
+    this.modelSpan = Math.max(size.x, size.y, size.z);
+    this.scanScale = Math.max(0.9, Math.min(2.6, 0.5 / Math.max(this.modelSpan, 0.05)));
+    if (this.habitat === 'ground' || this.habitat === 'perch') this.rig.body.position.y -= bounds.min.y;
     this.bob.add(this.rig.body);
     this.root.add(this.bob);
+    this.root.scale.setScalar(this.restScale);
     this.rest = this.rig.folds.map((f) => f.obj.quaternion.clone());
     this.lastBeat = this.rig.folds.reduce((m, f) => Math.max(m, f.beat), 0);
     if (this.rig.head) this.headRest.copy(this.rig.head.quaternion);
@@ -286,6 +299,8 @@ export class Creature {
     for (const c of this.rig.cores) c.visible = on;
     if (on && !this.volume) {
       this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
+      this.volume.mesh.position.y += this.rig.body.position.y;
+      this.volume.sand.position.y += this.rig.body.position.y;
       this.bob.add(this.volume.mesh, this.volume.sand);
     }
     // Layers a centimetre or more apart are what the two eyes read as depth.
@@ -329,9 +344,19 @@ export class Creature {
 
   /** The scale at which this kind stands about half a metre across on the table. */
   get tableScale(): number {
-    const size = new Box3().setFromObject(this.rig.body).getSize(this.v);
-    const span = Math.max(size.x, size.y, size.z) / Math.max(this.root.scale.x, 1e-4);
-    return Math.max(0.9, Math.min(2.6, 0.5 / Math.max(span, 0.05)));
+    return this.scanScale;
+  }
+
+  get restScale(): number {
+    return this.realSpanCm / (100 * this.modelSpan);
+  }
+
+  get realSpanCm(): number {
+    return REAL_SPAN[this.kind];
+  }
+
+  get magnification(): number {
+    return this.tableScale / this.restScale;
   }
 
   /** How many flat faces the model is made of. */
@@ -356,6 +381,11 @@ export class Creature {
     this.rig.cloud.dispose();
     this.root.traverse((o) => {
       if ((o as Mesh).isMesh && o.name === 'Paper') (o as Mesh).geometry.dispose();
+      if ((o as Mesh).isMesh && o.name === 'Touch') {
+        const touch = o as Mesh;
+        touch.geometry.dispose();
+        (touch.material as MeshBasicMaterial).dispose();
+      }
       if ((o as LineSegments).isLineSegments) (o as LineSegments).geometry.dispose();
     });
     this.rig.lines.dispose();

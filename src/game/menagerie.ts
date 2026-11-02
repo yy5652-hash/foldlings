@@ -357,7 +357,7 @@ export class Menagerie {
           (dx) => pointInPoly(x + dx, z, s.polygon) && pointInPoly(x, z + dx, s.polygon),
         );
         if (!margin) continue;
-        const p = new Vector3(x, s.center.y + 0.002, z);
+        const p = new Vector3(x, s.center.y, z);
         if (clear(p) && inFront(p)) return p;
       }
       return null;
@@ -433,7 +433,12 @@ export class Menagerie {
 
   private spawnEntity(kind: CreatureKind, look: number): { c: Creature; entity: Entity } {
     const c = new Creature(kind, LOOKS[look % LOOKS.length]);
-    if (c.habitat === 'ground' || c.habitat === 'perch') c.root.add(blobShadow(kind === 'whale' ? 0.2 : 0.09));
+    // The contact ring inherits the creature's real resting scale.
+    if (c.habitat === 'ground' || c.habitat === 'perch') c.root.add(blobShadow(0.09));
+    // Keep at least 8 cm of reach, including between the sphere's vertices.
+    const touch = new Mesh(new SphereGeometry(0.085 / c.restScale, 16, 12), new MeshBasicMaterial({ visible: false, side: DoubleSide }));
+    touch.name = 'Touch';
+    c.root.add(touch);
     const entity = this.world.createTransformEntity(c.root);
     this.room.root.attach(c.root);
     entity.addComponent(RayInteractable);
@@ -552,7 +557,7 @@ export class Menagerie {
     fromLocal.y += HOVER;
     const toLocal = new Vector3().fromArray(rest.p);
     c.root.position.copy(startLocal);
-    c.root.scale.setScalar(0.35);
+    c.root.scale.setScalar(0.35 * c.restScale);
     c.startFoldUp();
     sfx.pop();
     const present = this.reduceMotion ? 0 : PRESENT;
@@ -679,7 +684,7 @@ export class Menagerie {
       const left = -tr.t;
       // On the table: drawn up large at the centre, turning once, then let go.
       const held = tr.present > 0 ? smooth((since - LIFT) / 0.9) * smooth(left / 0.8) : 0;
-      root.scale.setScalar((0.35 + 0.65 * e) * (1 + (tr.tableScale - 1) * held));
+      root.scale.setScalar((0.35 + 0.65 * e) * (l.c.restScale + (tr.tableScale - l.c.restScale) * held));
       root.position.lerpVectors(tr.start, tr.from, e);
       root.position.lerp(tr.presentAt, held);
       root.position.y += Math.sin(since * 3.2) * 0.006 * e;
@@ -714,7 +719,7 @@ export class Menagerie {
       if (sh) sh.visible = false;
       return;
     }
-    root.scale.setScalar(1);
+    root.scale.setScalar(l.c.restScale);
     const u = Math.min(1, tr.t / tr.dur);
     const shadow = root.getObjectByName('Shadow');
     if (shadow) shadow.visible = u >= 1;
@@ -905,7 +910,7 @@ export class Menagerie {
       prelude: 0,
       present: 0,
       presentAt: from,
-      tableScale: 1,
+      tableScale: l.c.restScale,
       marked: true,
       woke: true,
       normal: null,
