@@ -112,6 +112,7 @@ export class Button {
       order: LAYER.control,
     });
     this.surface.material.uniforms.uSpot.value = this.r * 1.6;
+    this.cap.position.y = 0.007;
     this.cap.rotation.x = -Math.PI / 2;
     this.cap.add(this.surface.mesh, hitDisc(this.r * 1.08));
     this.root.add(this.cap);
@@ -181,7 +182,7 @@ export class Button {
     // On at once, off in about 180 ms.
     this.glow = follow(this.glow, on ? 1 : 0, on ? 40 : 14, dt);
     const lift = this.lift.to(on ? 1 : 0, dt);
-    this.cap.position.y = lift * 0.004 - this.press.x * 0.003;
+    this.cap.position.y = 0.007 + lift * 0.004 - this.press.x * 0.007;
     this.cap.scale.setScalar(1 + lift * 0.04 + breath * 0.05 - this.press.x * 0.05);
     const k = Math.max(this.glow, breath * 0.6);
     this.surface.setHover(k, this.pulseLeft > 0 && !on ? 0 : this.hoverX, this.pulseLeft > 0 && !on ? 0 : this.hoverY);

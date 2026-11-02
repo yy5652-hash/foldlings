@@ -11,6 +11,7 @@ import {
   CanvasTexture,
   CapsuleGeometry,
   CircleGeometry,
+  Color,
   Float32BufferAttribute,
   FrontSide,
   InstancedMesh,
@@ -129,9 +130,16 @@ export class HandBodies {
   private sdkOutline: Mesh[] = [];
   /** Where each hand pinches, and whether it is pinching now. */
   readonly pinch = {
-    left: { on: false, at: new Vector3() },
-    right: { on: false, at: new Vector3() },
+    left: { on: false, tracked: false, at: new Vector3() },
+    right: { on: false, tracked: false, at: new Vector3() },
   };
+  private fingerStates: ('idle' | 'near' | 'held')[] = ['idle', 'idle'];
+  private tips: Mesh<SphereGeometry, MeshBasicMaterial>[][] = [];
+  private saved = [JOINTS.map(() => new Vector3()), JOINTS.map(() => new Vector3())];
+  private seen = [-Infinity, -Infinity];
+  private tracked = [false, false];
+  private tint = new Color();
+  private boneColor = new Float32Array(MAX * 6);
   private cursors: Mesh[] = [];
   private rays: Mesh[] = [];
   private clock = 0;
@@ -157,18 +165,40 @@ export class HandBodies {
       new MeshBasicMaterial({ color: 0xbdf2ff, transparent: true, depthWrite: false, blending: AdditiveBlending, toneMapped: false }),
       JOINTS.length * 2,
     );
+    this.joints.setColorAt(0, this.tint);
     this.joints.count = 0;
     this.joints.frustumCulled = false;
     this.joints.renderOrder = 130;
     this.joints.raycast = () => {};
     const bg = new BufferGeometry();
     bg.setAttribute('position', new Float32BufferAttribute(this.bonePos, 3));
+    bg.setAttribute('color', new Float32BufferAttribute(this.boneColor, 3));
     this.bones = new LineSegments(bg, holoLine(0x62d6ff, 0.8));
+    (this.bones.material as MeshBasicMaterial).vertexColors = true;
     this.bones.frustumCulled = false;
     this.bones.renderOrder = 130;
     this.bones.raycast = () => {};
     world.scene.add(this.mesh, this.joints, this.bones);
+    for (let side = 0; side < 2; side++) {
+      const tips = [];
+      for (let i = 0; i < 2; i++) {
+        const tip = new Mesh(new SphereGeometry(0.006, 12, 8), new MeshBasicMaterial({
+          color: 0x8fe6ff, transparent: true, opacity: 0, blending: AdditiveBlending,
+          depthWrite: false, toneMapped: false,
+        }));
+        tip.visible = false;
+        tip.raycast = () => {};
+        tip.renderOrder = 131;
+        tips.push(tip);
+        world.scene.add(tip);
+      }
+      this.tips.push(tips);
+    }
     world.onXRFrame((frame) => this.onXRFrame(frame));
+  }
+
+  setFingerState(hand: XRHandedness, state: 'idle' | 'near' | 'held') {
+    if (hand !== 'none') this.fingerStates[hand === 'left' ? 0 : 1] = state;
   }
 
   /** Frosted glass hands when real ones cannot be seen; a depth mask otherwise. */
@@ -244,6 +274,9 @@ export class HandBodies {
     HOLO_FINGERS.value[0].y = -99;
     HOLO_FINGERS.value[1].y = -99;
     this.pinch.left.on = this.pinch.right.on = false;
+    this.pinch.left.tracked = this.pinch.right.tracked = false;
+    this.tracked[0] = this.tracked[1] = false;
+    const now = frame.predictedDisplayTime / 1000;
     for (const src of frame.session.inputSources) {
       if (!src.hand) continue;
       let ok = true;
@@ -266,30 +299,55 @@ export class HandBodies {
       const hold = left ? this.pinch.left : this.pinch.right;
       hold.on = tip.distanceTo(thumb) < 0.024;
       hold.at.addVectors(tip, thumb).multiplyScalar(0.5);
+      hold.tracked = true;
+      const side = left ? 0 : 1;
+      this.tracked[side] = true;
+      this.seen[side] = now;
+      for (let i = 0; i < JOINTS.length; i++) this.saved[side][i].copy(this.pos[i]);
+      for (const [a, b] of LINKS) {
+        if (n < MAX) this.write(n++, a, b);
+      }
+    }
+    for (let side = 0; side < 2; side++) {
+      const visible = now - this.seen[side] <= 1.5 && !this.hidden;
+      const dim = this.tracked[side] ? 1 : 0.25;
+      for (let i = 0; i < 2; i++) {
+        const tip = this.tips[side][i];
+        const state = this.fingerStates[side];
+        tip.visible = visible && state !== 'idle';
+        tip.position.copy(this.saved[side][i === 0 ? INDEX_TIP : THUMB_TIP]);
+        tip.material.opacity = (state === 'held' ? 1 : 0.35) * dim;
+        tip.scale.setScalar(state === 'held' ? 0.85 : 1.4);
+      }
+      if (!visible) continue;
+      this.tint.setRGB(dim, dim, dim);
+      const pos = this.saved[side];
       for (let i = 0; i < JOINTS.length; i++) {
-        this.m.makeTranslation(this.pos[i].x, this.pos[i].y, this.pos[i].z);
-        if (jn < JOINTS.length * 2) this.joints.setMatrixAt(jn++, this.m);
+        this.m.makeTranslation(pos[i].x, pos[i].y, pos[i].z);
+        this.joints.setMatrixAt(jn, this.m);
+        this.joints.setColorAt(jn++, this.tint);
       }
       for (const [a, b] of LINKS) {
-        if (n >= MAX) break;
-        this.write(n++, a, b);
-        const pa = this.pos[a];
-        const pb = this.pos[b];
+        const pa = pos[a];
+        const pb = pos[b];
         this.bonePos[bn++] = pa.x;
         this.bonePos[bn++] = pa.y;
         this.bonePos[bn++] = pa.z;
         this.bonePos[bn++] = pb.x;
         this.bonePos[bn++] = pb.y;
         this.bonePos[bn++] = pb.z;
+        this.boneColor.fill(dim, bn - 6, bn);
       }
     }
     this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;
     this.joints.count = this.hidden ? 0 : jn;
     this.joints.instanceMatrix.needsUpdate = true;
+    if (this.joints.instanceColor) this.joints.instanceColor.needsUpdate = true;
     this.bonePos.fill(0, bn);
     this.bones.visible = !this.hidden;
     this.bones.geometry.attributes.position.needsUpdate = true;
+    this.bones.geometry.attributes.color.needsUpdate = true;
   }
 
   private write(index: number, a: number, b: number) {

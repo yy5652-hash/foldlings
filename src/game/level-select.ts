@@ -9,9 +9,11 @@ import { applyFolds } from '../fold/paper.js';
 import { drawShape } from './board-view.js';
 import { Button } from './button.js';
 import { buildRig } from './creature-models.js';
-import { drawIcon, drawStars, GlassWindow, INK, LAYER, setFont, DISPLAY } from './glass.js';
+import { contentTexture, drawIcon, drawStars, GlassWindow, INK, LAYER, setFont, DISPLAY, Surface } from './glass.js';
 import { Level, LEVELS, PER_WORLD, WORLDS } from './levels.js';
 import { Best, totalStars, UNLOCK, worldOpen } from './score.js';
+import type { HandBodies } from './hand-bodies.js';
+import { PinchPull } from './pinch-pull.js';
 import { sfx } from './sfx.js';
 
 const W = 0.5;
@@ -45,6 +47,9 @@ export class LevelSelect {
   private back: Button;
   private page = -1;
   private spin = 0;
+  private pullTiles: { pulls: PinchPull[]; surface: Surface; run: () => void; open: () => boolean; owner: number }[] = [];
+  private local = new Vector3();
+  private hands?: HandBodies['pinch'];
 
   constructor(world: World, private host: LevelBookHost) {
     this.win = new GlassWindow(world, { name: 'LevelBook', w: W, h: H, px: PX, r: 0.03, autoClose: AUTO_CLOSE });
@@ -98,6 +103,12 @@ export class LevelSelect {
   }
 
   private clearTiles() {
+    for (const tile of this.pullTiles) {
+      this.win.content.remove(tile.surface.mesh);
+      tile.surface.material.uniforms.uMap.value.dispose();
+      tile.surface.material.dispose();
+    }
+    this.pullTiles.length = 0;
     this.win.clearHits();
     for (const m of [...this.minis.children]) {
       this.minis.remove(m);
@@ -113,6 +124,17 @@ export class LevelSelect {
 
   private addTile(t: Tile, run: () => void, name: string) {
     this.win.addHit(t.x, t.y, t.w, t.h, 8, () => {
+      if (name.startsWith('LevelBook_level_') && this.hands) {
+        for (let i = 0; i < 2; i++) {
+          const hand = i === 0 ? this.hands.left : this.hands.right;
+          if (!hand.tracked || !hand.on) continue;
+          this.local.copy(hand.at);
+          this.win.content.worldToLocal(this.local);
+          const px = (this.local.x / W + 0.5) * PX;
+          const py = (0.5 - this.local.y / H) * this.win.py;
+          if (Math.abs(this.local.z) < 0.04 && px >= t.x && px <= t.x + t.w && py >= t.y && py <= t.y + t.h) return;
+        }
+      }
       sfx.click();
       run();
     }, name);
@@ -309,6 +331,30 @@ export class LevelSelect {
       }, `LevelBook_level_${i + 1}`);
     });
     this.drawWorld(w);
+    this.levelTiles().forEach((t, i) => {
+      const [x, y] = this.win.toLocal(t.x + t.w / 2, t.y + t.h / 2);
+      const width = t.w * W / PX;
+      const height = t.h * W / PX;
+      const hit = { minX: x - width / 2, maxX: x + width / 2, minY: y - height / 2, maxY: y + height / 2 };
+      const canvas = document.createElement('canvas');
+      canvas.width = t.w;
+      canvas.height = t.h;
+      canvas.getContext('2d')!.drawImage(this.win.canvas!, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
+      const surface = new Surface({ w: width, h: height, r: 0.004, map: contentTexture(canvas), order: LAYER.control });
+      surface.mesh.position.set(x, y, 0.004);
+      surface.mesh.visible = false;
+      this.win.content.add(surface.mesh);
+      const pulls = [new PinchPull(0.08, hit), new PinchPull(0.08, hit)];
+      for (const pull of pulls) pull.reset(true);
+      this.pullTiles.push({
+        pulls, surface, owner: -1,
+        open: () => this.levelOpen(list, i, this.host.best()),
+        run: () => {
+          this.hide();
+          this.host.play(LEVELS.indexOf(list[i]));
+        },
+      });
+    });
   }
 
   private thumbs = new Map<string, HTMLCanvasElement>();
@@ -377,8 +423,43 @@ export class LevelSelect {
     this.back.root.position.y = hidden ? -50 : this.win.toLocal(0, 70)[1];
   }
 
-  update(dt: number) {
+  update(dt: number, hands?: HandBodies['pinch']) {
+    this.hands = hands;
     this.win.update(dt);
+    for (const tile of this.pullTiles) {
+      let progress = 0;
+      for (let i = 0; i < 2; i++) {
+        const hand = i === 0 ? hands?.left : hands?.right;
+        const pull = tile.pulls[i];
+        if (!this.win.ready || !tile.open() || !hand?.tracked || (tile.owner >= 0 && tile.owner !== i)) {
+          pull.reset(hand?.on ?? false);
+          if (tile.owner === i) tile.owner = -1;
+          continue;
+        }
+        this.local.copy(hand.at);
+        this.win.content.worldToLocal(this.local);
+        pull.update(hand.on, this.local.x, this.local.y, this.local.z, dt, Math.abs(this.local.z) < 0.04);
+        if (pull.active && tile.owner < 0) {
+          tile.owner = i;
+          sfx.pick();
+        }
+        if (tile.owner === i) {
+          progress = pull.progress;
+          this.win.touch();
+          if (pull.commit || (pull.active && pull.progress >= 0.5)) {
+            sfx.click();
+            tile.run();
+            return;
+          }
+          if (!pull.active && progress === 0) tile.owner = -1;
+        }
+      }
+      tile.surface.mesh.visible = this.win.isOpen && progress > 0.001;
+      const grow = 1 + progress * 0.3;
+      const half = tile.surface.material.uniforms.uHalf.value;
+      tile.surface.mesh.scale.set(half.x * 2 * grow, half.y * 2 * grow, 1);
+      tile.surface.mesh.position.z = 0.004 + progress * 0.08;
+    }
     if (this.win.isOpen) {
       this.spin += dt * 0.7;
       for (const m of this.minis.children) m.children[0].rotation.y = this.spin;

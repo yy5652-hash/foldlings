@@ -19,7 +19,6 @@ import {
 import { rawCrease, snapCrease, Snap, Point3 } from '../fold/creases.js';
 import {
   applyAffine,
-  closestOnConvex,
   Line,
   lineChord,
   lineSide,
@@ -49,6 +48,9 @@ import { CONTROL_GLASS, fadeTree, floatOverRoom, follow, LAYER, Surface } from '
 import { Guide } from './guide.js';
 import { Result, scoreSolve } from './score.js';
 import { SavedSheet } from './resume.js';
+import { Grip } from './grip.js';
+import type { HandBodies } from './hand-bodies.js';
+import { isUndo, unfoldFlap } from './unfold.js';
 import { HandGrace, HandsMissing } from './hand-grace.js';
 import { Xray } from './xray.js';
 import { Level, LEVELS } from './levels.js';
@@ -69,6 +71,9 @@ interface Drag {
   startedAt: number;
   /** The fold under the hand would solve the puzzle. */
   solves: boolean;
+  unfolds: boolean;
+  grip: boolean;
+  lostPrompted: boolean;
 }
 
 interface Settle {
@@ -77,9 +82,11 @@ interface Settle {
   to: number;
   t: number;
   dur: number;
+  unfolds: boolean;
 }
 
 const NEAR_HEIGHT = 0.09;
+const GRIP_HEIGHT = 0.05;
 const NEAR_MARGIN = 0.025;
 
 export interface FoldGameEvents {
@@ -152,6 +159,11 @@ export class FoldGame {
   private hinted = false;
 
   private drag: Drag | null = null;
+  handBodies?: HandBodies;
+  private grips = { left: new Grip(), right: new Grip() };
+  private sourceGap = 0;
+  private gripTracked = { left: false, right: false };
+  private reverse: ReturnType<typeof unfoldFlap> = null;
   private handGrace = new HandGrace();
   private handsMissing = new HandsMissing();
   private handsTracked = false;
@@ -163,6 +175,7 @@ export class FoldGame {
   private tmp = new Vector3();
   private tmp2 = new Vector3();
   private cursors: Mesh[] = [];
+  private grabHit: V2 = { x: 0, y: 0 };
   private cursorHand: Point3 = { x: 0, y: 0, h: 0 };
   private plane = new Plane();
   private ray = new Ray();
@@ -433,6 +446,8 @@ export class FoldGame {
     this.creaseHistory = [];
     this.solved = false;
     this.drag = null;
+    this.grips.left.reset();
+    this.grips.right.reset();
     this.handGrace.reset();
     this.settle = null;
     this.folds = 0;
@@ -517,6 +532,8 @@ export class FoldGame {
     this.handsMissing.reset();
     this.handsTracked = false;
     this.pinchingHands.clear();
+    this.grips.left.reset();
+    this.grips.right.reset();
     session.addEventListener('selectstart', (e) => this.onSelectStart(e));
     session.addEventListener('selectend', (e) => this.onSelectEnd(e));
     session.addEventListener('inputsourceschange', (e) => {
@@ -551,6 +568,9 @@ export class FoldGame {
       const a = frame.getJointPose(thumb, ref);
       const b = frame.getJointPose(index, ref);
       if (!a || !b) return null;
+      const pa = a.transform.position;
+      const pb = b.transform.position;
+      this.sourceGap = Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z);
       out.set(
         (a.transform.position.x + b.transform.position.x) / 2,
         (a.transform.position.y + b.transform.position.y) / 2,
@@ -574,11 +594,22 @@ export class FoldGame {
     let best: V2 | null = null;
     let bestD = NEAR_MARGIN;
     for (const f of this.paper.facets) {
-      const q = closestOnConvex(f.poly, p);
-      const d = Math.hypot(q.x - p.x, q.y - p.y);
-      if (d < bestD) {
-        bestD = d;
-        best = q;
+      for (let i = 0; i < f.poly.length; i++) {
+        const a = f.poly[i];
+        const b = f.poly[(i + 1) % f.poly.length];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+        const x = a.x + dx * t;
+        const y = a.y + dy * t;
+        const d = Math.hypot(x - p.x, y - p.y);
+        if (d < bestD) {
+          bestD = d;
+          this.grabHit.x = x;
+          this.grabHit.y = y;
+          best = this.grabHit;
+        }
       }
     }
     return best;
@@ -637,7 +668,7 @@ export class FoldGame {
     if (e.inputSource.hand) {
       this.pinchingHands.delete(e.inputSource);
       if (this.drag?.source === e.inputSource) {
-        this.handGrace.pinchEnded();
+        if (!this.drag.grip || !this.gripFor(e.inputSource)?.held) this.handGrace.pinchEnded();
         return;
       }
     }
@@ -709,6 +740,7 @@ export class FoldGame {
     p: V2,
     hand: Point3,
   ) {
+    this.reverse = unfoldFlap(this.paper, this.history[this.history.length - 1], this.played[this.played.length - 1], p);
     this.handGrace.reset();
     if (source?.hand) this.handGrace.begin();
     this.guide.hide();
@@ -723,6 +755,9 @@ export class FoldGame {
       angle: 0,
       startedAt: this.time,
       solves: false,
+      unfolds: false,
+      grip: false,
+      lostPrompted: false,
     };
     sfx.pick();
   }
@@ -732,7 +767,9 @@ export class FoldGame {
     if (this.drag && !cancel) this.updateDrag(0, true);
     this.xray.hideSolver();
     const d = this.drag;
+    if (d?.source) this.handBodies?.setFingerState(d.source.handedness, 'idle');
     this.drag = null;
+    if (d?.grip && d.source) this.gripFor(d.source)?.reset();
     this.handGrace.reset();
     if (d?.kind === 'ray' && d.source?.hand) {
       this.board.hitPlane.releasePointerCapture?.(d.pointerId);
@@ -750,12 +787,45 @@ export class FoldGame {
       from: d.angle,
       to: commit ? Math.PI : 0,
       t: 0,
+      unfolds: d.unfolds,
       dur: commit ? 0.16 + 0.12 * (1 - d.angle / Math.PI) : 0.2,
     };
     if (!commit) sfx.cancel();
   }
 
+  private gripFor(source: XRInputSource) {
+    return source.handedness === 'left' ? this.grips.left : source.handedness === 'right' ? this.grips.right : null;
+  }
+
   private onXRFrame(frame: XRFrame) {
+    this.gripTracked.left = this.gripTracked.right = false;
+    for (const source of frame.session.inputSources) {
+      if (!source.hand) continue;
+      const grip = this.gripFor(source);
+      const world = this.sourcePoint(frame, source, this.tmp);
+      if (!world || !grip) continue;
+      if (source.handedness !== 'none') this.gripTracked[source.handedness] = true;
+      const hand = this.toBoard(world, this.cursorHand);
+      // Not yet a full pinch, so ask for a hand close to the paper.
+      const p = hand.h >= -0.03 && hand.h <= GRIP_HEIGHT ? this.grabPoint(hand) : null;
+      const near = !!p && this.canStart();
+      const eligible = !this.drag || (this.drag.source?.handedness === source.handedness &&
+        (this.drag.grip || (this.drag.kind === 'ray' && this.time - this.drag.startedAt < 0.15)));
+      const action = grip.update(this.sourceGap, near && eligible);
+      if (action === 'engage' && p && (!this.drag || (this.drag.source === source && this.drag.kind === 'ray' && this.time - this.drag.startedAt < 0.15))) {
+        if (this.drag?.kind === 'ray') this.board.hitPlane.releasePointerCapture?.(this.drag.pointerId);
+        this.beginDrag('near', source, -1, p, hand);
+        this.drag!.grip = true;
+      } else if (action === 'engage' && this.drag?.grip && this.drag.source?.handedness === source.handedness) {
+        this.handGrace.pinchStarted();
+      } else if (action === 'release' && this.drag?.grip && this.drag.source?.handedness === source.handedness) {
+        this.handGrace.pinchEnded();
+      }
+      this.handBodies?.setFingerState(source.handedness,
+        this.drag?.source?.handedness === source.handedness ? 'held' : near ? 'near' : 'idle');
+    }
+    if (!this.gripTracked.left && this.drag?.source?.handedness !== 'left') this.grips.left.reset();
+    if (!this.gripTracked.right && this.drag?.source?.handedness !== 'right') this.grips.right.reset();
     const d = this.drag;
     if (d?.source?.hand) {
       let present = false;
@@ -777,7 +847,7 @@ export class FoldGame {
       if (!world) {
         this.handGrace.trackingLost();
       } else {
-        const pinching = d.source.gamepad?.buttons[0]?.pressed ?? this.pinchingHands.has(d.source);
+        const pinching = d.grip ? !!this.gripFor(d.source)?.held : d.source.gamepad?.buttons[0]?.pressed ?? this.pinchingHands.has(d.source);
         const action = this.handGrace.trackingFound(pinching);
         if (action === 'cancel') this.endDrag(true);
         // While a release is pending, keep the spot where the pinch let go.
@@ -787,6 +857,10 @@ export class FoldGame {
     } else if (d && d.kind === 'near' && d.source) {
       const world = this.sourcePoint(frame, d.source, this.tmp);
       if (world) this.toBoard(world, d.hand);
+    }
+    if (this.handGrace.frozen && d && !d.lostPrompted) {
+      d.lostPrompted = true;
+      this.say('Lost your hand. Show it again to keep folding');
     }
     this.updateCursors(frame);
     const ref = this.world.renderer.xr.getReferenceSpace();
@@ -798,7 +872,7 @@ export class FoldGame {
 
   /**
    * A soft ring under each hand shows where a pinch would take hold of the
-   * paper; it tightens as the fingers close and turns gold when in reach.
+   * paper; it tightens as the fingers close and brightens cyan when in reach.
    */
   private updateCursors(frame: XRFrame) {
     const session = frame.session;
@@ -838,7 +912,7 @@ export class FoldGame {
         const s = 0.6 + Math.min(1, gap / 0.06) * 0.9;
         c.scale.setScalar(s);
         const m = c.material as MeshBasicMaterial;
-        m.color.set(near ? 0xffd166 : 0xffffff);
+        m.color.set(near ? 0x8fe6ff : 0x62d6ff);
         m.opacity = near ? 0.95 : 0.5;
       }
     }
@@ -925,17 +999,34 @@ export class FoldGame {
   private updateDrag(dt: number, immediate = false) {
     const d = this.drag!;
     const raw = rawCrease(d.p, d.hand);
-    const snap = raw ? snapCrease(raw, d.p, this.paper, d.snap, this.easyFolds ? 0.09 : 0.05) : null;
+    let snap = raw ? snapCrease(raw, d.p, this.paper, d.snap, this.easyFolds ? 0.09 : 0.05) : null;
+    let unfolds = false;
+    const back = this.reverse;
+    if (raw && back) {
+      const sign = raw.nx * back.line.nx + raw.ny * back.line.ny < 0 ? -1 : 1;
+      const side = lineSide(back.line, d.p);
+      const fx = d.p.x - back.line.nx * side;
+      const fy = d.p.y - back.line.ny * side;
+      const error = Math.abs(raw.nx * fx + raw.ny * fy - raw.d) +
+        0.06 * Math.hypot(raw.nx * sign - back.line.nx, raw.ny * sign - back.line.ny);
+      if (error < (this.easyFolds ? 0.09 : 0.05) && (!snap || error <= snap.error + 0.007)) {
+        back.error = error;
+        snap = back;
+        unfolds = true;
+      }
+    }
     if (this.xray.enabled) this.showSolver(d, raw);
     const changed =
+      unfolds !== d.unfolds ||
       (snap === null) !== (d.snap === null) ||
       (snap && d.snap && (snap.f !== d.snap.f || snap.k !== d.snap.k || snap.s !== d.snap.s));
     if (changed) {
       d.snap = snap;
+      d.unfolds = unfolds;
       if (snap) {
-        const parts = splitPaper(this.paper, snap.line, snap.s)!;
+        const parts = unfolds && back ? back : splitPaper(this.paper, snap.line, snap.s)!;
         this.paperView.setSplit(parts.stay, parts.move, snap.line, snap.s);
-        const result = foldPaper(this.paper, snap.line, snap.s);
+        const result = unfolds && back ? back.result : foldPaper(this.paper, snap.line, snap.s);
         const solves = !this.isFree && !!result && bestMatch(rasterize(result), this.targets) >= 0.999;
         if (solves && !d.solves) sfx.warm();
         else sfx.snap();
@@ -951,13 +1042,13 @@ export class FoldGame {
       return;
     }
     // Angle that swings the grabbed point towards the hand around the crease.
-    const across = d.snap.s * lineSide(d.snap.line, { x: d.hand.x, y: d.hand.y });
+    const across = d.snap.s * lineSide(d.snap.line, d.hand);
     const target = Math.atan2(Math.max(0, d.hand.h), across);
     const k = immediate ? 1 : 1 - Math.exp(-dt * 22);
     d.angle += (target - d.angle) * k;
     this.paperView.setFlapAngle(d.angle);
     this.board.showCrease(d.snap.line, d.angle > Math.PI / 2, d.solves);
-    this.board.setMeasure(this.hintsOff ? null : d.snap.line, this.folds + 1, this.level.par, d.solves);
+    this.board.setMeasure(this.hintsOff ? null : d.snap.line, this.folds + 1, this.level.par, d.solves, d.unfolds);
   }
 
   private updateSettle(dt: number) {
@@ -971,11 +1062,15 @@ export class FoldGame {
       this.paperView.setPaper(this.paper);
       return;
     }
-    this.commitFold(s.snap);
+    this.commitFold(s.snap, false, s.unfolds);
   }
 
-  private commitFold(snap: Snap, silent = false) {
-    const next = foldPaper(this.paper, snap.line, snap.s);
+  private commitFold(snap: Snap, silent = false, unfolds = false) {
+    const next = unfolds && this.reverse ? this.reverse.result : foldPaper(this.paper, snap.line, snap.s);
+    if (!silent && isUndo(snap, this.played[this.played.length - 1], next, this.history[this.history.length - 1])) {
+      this.undo();
+      return;
+    }
     if (!next) {
       this.paperView.setPaper(this.paper);
       return;

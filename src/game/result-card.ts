@@ -4,10 +4,12 @@
  * which the Next button shows as a fill running across it.
  */
 
-import { Entity, Group, Mesh, PokeInteractable, RayInteractable, Shape, ShapeGeometry, MeshBasicMaterial, Color, World } from '@iwsdk/core';
+import { Entity, Group, Mesh, PokeInteractable, RayInteractable, Shape, ShapeGeometry, MeshBasicMaterial, Color, Vector3, World } from '@iwsdk/core';
 import { Button } from './button.js';
 import { CONTROL_GLASS, DISPLAY, floatOverRoom, GlassWindow, hitPlane, INK, LAYER, setFont, Spring, Surface, TextLabel } from './glass.js';
 import type { Best, Result } from './score.js';
+import type { HandBodies } from './hand-bodies.js';
+import { PinchPull } from './pinch-pull.js';
 import { sfx } from './sfx.js';
 
 export type ResultAction = 'next' | 'retry' | 'levels';
@@ -96,6 +98,13 @@ class PillButton {
 
 export class ResultCard {
   private win: GlassWindow;
+  private pulls = [
+    new PinchPull(W / 2, { minX: 0, maxX: W / 2, minY: -H / 2, maxY: H / 2 }),
+    new PinchPull(W / 2, { minX: 0, maxX: W / 2, minY: -H / 2, maxY: H / 2 }),
+  ];
+  private pullHand = -1;
+  private local = new Vector3();
+  private pullProgress = 0;
   private stars: Mesh[] = [];
   private next: PillButton;
   private controls: { update(dt: number): void }[] = [];
@@ -171,6 +180,11 @@ export class ResultCard {
     this.win.root.rotation.set(-0.3, 0, 0);
     this.win.show();
     this.t = 0;
+    this.pullHand = -1;
+    this.pullProgress = 0;
+    for (const pull of this.pulls) pull.reset(true);
+    this.win.content.scale.x = this.win.content.scale.y;
+    this.win.content.position.x = 0;
   }
 
   hide() {
@@ -204,11 +218,43 @@ export class ResultCard {
     this.win.commit();
   }
 
-  update(dt: number) {
+  update(dt: number, hands?: HandBodies['pinch']) {
     this.win.update(dt);
     for (const c of this.controls) c.update(dt);
     if (this.t < 0) return;
     this.t += dt;
+    if (hands && this.t >= 0.6) {
+      for (let i = 0; i < 2; i++) {
+        const hand = i === 0 ? hands.left : hands.right;
+        const pull = this.pulls[i];
+        if (!hand.tracked || (this.pullHand >= 0 && this.pullHand !== i)) {
+          pull.reset(hand.on);
+          if (this.pullHand === i) this.pullHand = -1;
+          continue;
+        }
+        // Use the unchanged panel frame while the visible card closes.
+        this.local.copy(hand.at);
+        this.win.root.worldToLocal(this.local);
+        if (!pull.active) pull.distance = Math.max(0.01, this.local.x * 2);
+        pull.update(hand.on, this.local.x, this.local.y, -this.local.x, dt, Math.abs(this.local.z) < 0.04);
+        if (pull.active && this.pullHand < 0) {
+          this.pullHand = i;
+          sfx.pick();
+        }
+        if (this.pullHand === i) {
+          this.pullProgress = pull.progress;
+          if (pull.commit) {
+            this.fire('next');
+            return;
+          }
+          if (!pull.active && pull.progress === 0) this.pullHand = -1;
+        }
+      }
+    }
+    if (this.pullHand < 0) this.pullProgress *= Math.exp(-18 * dt);
+    const scale = this.win.content.scale.y;
+    this.win.content.scale.x = scale * (1 - this.pullProgress * 0.95);
+    this.win.content.position.x = -W / 2 * scale * this.pullProgress * 0.95;
     // Stars light one by one, each with its own note.
     const due = Math.min(this.earned, Math.floor((this.t - 0.3) / 0.32) + 1);
     while (this.popped < due) {
