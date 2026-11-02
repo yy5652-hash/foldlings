@@ -101,6 +101,8 @@ export default async function ({ page, frame, cdp, signal }) {
   }
   await new Promise((r) => setTimeout(r, 500));
   await remote('set_input_mode', { mode: shot.input ?? 'hand' });
+  // The film lens narrows the projection; the layout must stay the headset's.
+  await frame.evaluate((angles) => window.__foldlings.forceFov?.(...angles), shot.layoutFov ?? [55, 55, 48, 50]);
   for (const s of shot.setup ?? []) {
     if (s.remote) await remote(s.remote, s.params ?? {});
     if (s.eval) await frame.evaluate((src) => new Function(`return (${src});`)(), s.eval);

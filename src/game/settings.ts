@@ -58,14 +58,25 @@ const STEPS: { key: 'matHeight' | 'matDistance'; label: string }[] = [
 ];
 const AUTO_CLOSE = 25;
 
-const W = 0.4;
-const PX = 1000;
+/** Two columns, so the panel stays below eye level and hands stay low. */
+const W = 0.63;
+const PX = 1575;
 const M = W / PX;
 const PAD = 40;
+const GAP = 30;
+const COL_W = (PX - PAD * 2 - GAP) / 2;
 const TOP = 138;
 const ROW_H = 75;
 const ROW_STEP = 110;
-const H = 0.52;
+const H = 0.29;
+const PER_COLUMN = 5;
+/** Canvas position of the i-th row, filling the left column first. */
+const cell = (i: number) => ({
+  x: PAD + (i < PER_COLUMN ? 0 : COL_W + GAP),
+  y: TOP + (i % PER_COLUMN) * ROW_STEP,
+});
+/** Panel-space x of a row's right edge. */
+const rightEdge = (i: number) => (cell(i).x + COL_W) * M - W / 2;
 
 interface SettingsActions {
   sound: () => boolean;
@@ -88,15 +99,14 @@ export class SettingsPanel {
   ) {
     this.state = { ...state };
     this.win = new GlassWindow(world, { name: 'SettingsPanel', w: W, h: H, px: PX, r: 0.03, autoClose: AUTO_CLOSE });
-    const rowY = (i: number) => TOP + i * ROW_STEP;
     ROWS.forEach((row, i) => {
-      const y = rowY(i);
+      const { x, y } = cell(i);
       const [, ly] = this.win.toLocal(0, y + ROW_H / 2);
       const toggle = new Toggle(this.state[row.key], 0.019);
-      toggle.root.position.set(0.154, ly, 0.0015);
+      toggle.root.position.set(rightEdge(i) - 0.03, ly, 0.0015);
       this.win.content.add(toggle.root);
       this.win.addTick(toggle);
-      this.win.addHit(PAD, y, PX - PAD * 2, ROW_H, 8, () => {
+      this.win.addHit(x, y, COL_W, ROW_H, 8, () => {
         this.state[row.key] = !this.state[row.key];
         toggle.on = this.state[row.key];
         sfx.click();
@@ -104,9 +114,11 @@ export class SettingsPanel {
       }, `Settings_${row.key}`);
     });
     STEPS.forEach((row, j) => {
-      const [, ly] = this.win.toLocal(0, rowY(ROWS.length + j) + ROW_H / 2);
+      const i = ROWS.length + j;
+      const edge = rightEdge(i);
+      const [, ly] = this.win.toLocal(0, cell(i).y + ROW_H / 2);
       const value = new TextLabel(0.018, 56, 500, INK.secondary);
-      value.mesh.position.set(0.07, ly, 0.0015);
+      value.mesh.position.set(edge - 0.114, ly, 0.0015);
       this.win.content.add(value.mesh);
       const text = () => {
         const cm = this.state[row.key] * MAT_STEP[row.key];
@@ -125,25 +137,25 @@ export class SettingsPanel {
       const plus = new Button('plus', () => nudge(1), '', { r: 0.012 });
       minus.root.name = `Settings_${row.key}_minus`;
       plus.root.name = `Settings_${row.key}_plus`;
-      minus.root.position.set(0.124, ly, 0.0025);
-      plus.root.position.set(0.166, ly, 0.0025);
+      minus.root.position.set(edge - 0.06, ly, 0.0025);
+      plus.root.position.set(edge - 0.018, ly, 0.0025);
       for (const b of [minus, plus]) {
         b.root.rotation.x = Math.PI / 2;
         this.win.addControl(b.root, b);
       }
     });
-    const [, sy] = this.win.toLocal(0, rowY(7) + ROW_H / 2);
+    const [, sy] = this.win.toLocal(0, cell(7).y + ROW_H / 2);
     this.sound = new Toggle(actions.sound(), 0.019);
-    this.sound.root.position.set(0.154, sy, 0.0015);
+    this.sound.root.position.set(rightEdge(7) - 0.03, sy, 0.0015);
     this.win.content.add(this.sound.root);
     this.win.addTick(this.sound);
-    this.win.addHit(PAD, rowY(7), PX - PAD * 2, ROW_H, 8, () => {
+    this.win.addHit(cell(7).x, cell(7).y, COL_W, ROW_H, 8, () => {
       actions.toggleSound();
       this.sound.on = actions.sound();
       sfx.click();
     }, 'Settings_sound');
     [actions.restart, actions.moveMat].forEach((run, i) => {
-      this.win.addHit(PAD, rowY(8 + i), PX - PAD * 2, ROW_H, 8, () => {
+      this.win.addHit(cell(8 + i).x, cell(8 + i).y, COL_W, ROW_H, 8, () => {
         sfx.click();
         this.close();
         run();
@@ -170,18 +182,18 @@ export class SettingsPanel {
     g.fillText('SETTINGS', PAD + 20, 76);
     const labels = [...ROWS.map((row) => row.label), ...STEPS.map((row) => row.label), 'Sound on / off', 'Restart this sheet', 'Move mat here'];
     labels.forEach((label, i) => {
-      const y = TOP + i * ROW_STEP;
+      const { x, y } = cell(i);
       g.fillStyle = INK.section;
       g.beginPath();
-      g.roundRect(PAD, y, PX - PAD * 2, ROW_H, 8);
+      g.roundRect(x, y, COL_W, ROW_H, 8);
       g.fill();
       g.fillStyle = INK.primary;
       setFont(g, 29, 500);
-      g.fillText(label.toUpperCase(), PAD + 20, y + ROW_H / 2 - (i < ROWS.length ? 18 : 0));
+      g.fillText(label.toUpperCase(), x + 20, y + ROW_H / 2 - (i < ROWS.length ? 18 : 0));
       if (i < ROWS.length) {
         g.fillStyle = INK.secondary;
         setFont(g, 28, 400);
-        g.fillText(ROWS[i].hint, PAD + 20, y + ROW_H / 2 + 18);
+        g.fillText(ROWS[i].hint, x + 20, y + ROW_H / 2 + 18);
       }
     });
     this.win.commit();
