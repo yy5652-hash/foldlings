@@ -10,6 +10,8 @@ export const patterns = [
   () => import('./frog.js').then(m => m.frog()),
   () => import('./fish.js').then(m => m.fish()),
   () => import('./whale.js').then(m => m.whale()),
+  () => import('./fox.js').then(m => m.fox()),
+  () => import('./rabbit.js').then(m => m.rabbit()),
 ];
 
 /** Rigid frame taking the original sheet plane to a final face. */
