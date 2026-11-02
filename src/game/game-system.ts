@@ -50,6 +50,7 @@ import { Best, mergeBest, Result, totalStars, worldOpen } from './score.js';
 import { decodeFolds, encodeFolds, formatCode } from './share.js';
 import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
+import { installRealDepth } from './real-depth.js';
 import { PalmMenu } from './palm-menu.js';
 import { TitleCard } from './title.js';
 import { loadSettings, MAT_STEP, saveSettings, SettingsPanel, SettingsState } from './settings.js';
@@ -205,6 +206,8 @@ export class GameSystem extends createSystem({
   private mode: 'desktop' | 'ar' | 'vr' = 'desktop';
 
   init(): void {
+    this.world.renderer.xr.setFramebufferScaleFactor(1.2);
+    const realDepth = installRealDepth(this.world);
     this.landing = document.getElementById('landing');
     // Soft room light for the mat, buttons and creatures.
     // Soft studio light: a warm window key that casts the only shadows (a
@@ -400,6 +403,17 @@ export class GameSystem extends createSystem({
     if (import.meta.env.DEV) {
       // Test hook: board point (u, v, height) → world position.
       (window as unknown as Record<string, unknown>).__foldlings = {
+        realDepth,
+        renderScale: () => {
+          const xr = this.world.renderer.xr;
+          const layer = xr.getBaseLayer();
+          return {
+            scale: 1.2,
+            foveation: xr.getFoveation(),
+            framebufferWidth: layer ? ('framebufferWidth' in layer ? layer.framebufferWidth : layer.textureWidth) : 0,
+            framebufferHeight: layer ? ('framebufferHeight' in layer ? layer.framebufferHeight : layer.textureHeight) : 0,
+          };
+        },
         fov: () => viewFov(this.world),
         forceFov: (left = 37, right = 37, up = 25, down = 43) => viewFov(this.world).force({ left, right, up, down }),
         game: this.game,
@@ -530,6 +544,7 @@ export class GameSystem extends createSystem({
       }
     }));
     this.world.renderer.xr.addEventListener('sessionstart', () => {
+      this.world.renderer.xr.setFoveation(0.35);
       this.clearDelivery();
       startMusic();
       this.sessionTime = 0;
@@ -640,7 +655,7 @@ export class GameSystem extends createSystem({
     const [head, a, b] = c.anchors;
     this.stage.setCallout(0, head, [0, 0, 0], 0.2, 0.07, kind.toUpperCase(), times > 0 ? `FOLDED ${times} ${times === 1 ? 'TIME' : 'TIMES'}` : 'IN YOUR ZOO');
     this.stage.setCallout(1, a, [0, 0, 0], 0.2, -0.03, `${c.facets} FACETS`, `${HABITAT[kind].toUpperCase()} HABITAT`);
-    this.stage.setCallout(2, b, [0, 0, 0], -0.2, 0.04, 'INNER LAYER', 'SHOWN IN AMBER');
+    this.stage.setCallout(2, b, [0, 0, 0], -0.2, 0.04, 'INNER LAYER', `SCAN x${c.magnification.toFixed(1)}  REAL ${c.realSpanCm} CM`);
     sfx.power();
   }
 

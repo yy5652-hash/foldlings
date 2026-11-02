@@ -195,7 +195,7 @@ function bake(kind: CreatureKind): Baked {
       tris.push(v.x, v.y, v.z);
     }
   });
-  const grid = voxelize(tris, 56, 0.019, 0.03);
+  const grid = voxelize(tris, 84, 0.012, 0.03);
   const tex = new Data3DTexture(grid.data, grid.nx, grid.ny, grid.nz);
   tex.format = RGFormat;
   tex.type = UnsignedByteType;
@@ -216,7 +216,7 @@ export class HoloVolume {
   readonly mesh: Mesh<BoxGeometry, ShaderMaterial>;
   readonly sand: Points<BufferGeometry, ShaderMaterial>;
   /** Fewer steps when a headset is short of frame rate. */
-  static steps = 26;
+  static steps = 32;
 
   constructor(kind: CreatureKind, shell: string, core: string) {
     const b = bake(kind);

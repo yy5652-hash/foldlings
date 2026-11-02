@@ -17,7 +17,8 @@
         "anchors": true,
         "planeDetection": true,
         "meshDetection": true,
-        "gazeTracking": true
+        "gazeTracking": true,
+        "depthSensing": { "required": false, "usage": "gpu-optimized" }
       }
     },
     "input": {

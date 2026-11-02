@@ -17,6 +17,26 @@ export interface Placement {
 const REACH = 0.42;
 const DESK_DROP = 0.42;
 
+/** Square to the longest table edge when that is close to the viewer's heading. */
+export function tableYaw(poly: { x: number; z: number }[], headYaw: number): number {
+  let longest = 0;
+  let edgeYaw = headYaw;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const length = dx * dx + dz * dz;
+    if (length > longest) {
+      longest = length;
+      edgeYaw = Math.atan2(-dz, dx);
+    }
+  }
+  const quarter = Math.PI / 2;
+  const nearest = edgeYaw + Math.round((headYaw - edgeYaw) / quarter) * quarter;
+  return Math.abs(nearest - headYaw) <= Math.PI / 6 + 1e-10 ? nearest : headYaw;
+}
+
 function pointInPolygon(x: number, z: number, poly: { x: number; z: number }[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -61,6 +81,7 @@ export function tablePlacement(head: Object3D, surfaces: Surface[]): Placement |
     // Tables sit well below the eyes and well above the floor.
     if (height < 0.35 || height > pos.y - 0.15 || height < pos.y - 1.0) continue;
     const poly = s.polygon.map((p) => ({ x: p.x, z: p.z }));
+    const alignedYaw = tableYaw(poly, yaw);
     let cx = 0;
     let cz = 0;
     for (const p of poly) {
@@ -69,7 +90,8 @@ export function tablePlacement(head: Object3D, surfaces: Surface[]): Placement |
     }
     const want = { x: pos.x + fwd.x * REACH, z: pos.z + fwd.z * REACH };
     // Slide from the ideal spot towards the surface centre until the mat fits.
-    const right = { x: -fwd.z, z: fwd.x };
+    const right = { x: Math.cos(alignedYaw), z: -Math.sin(alignedYaw) };
+    const forward = { x: -Math.sin(alignedYaw), z: -Math.cos(alignedYaw) };
     let spot: { x: number; z: number } | null = null;
     for (let t = 0; t <= 1.0001; t += 0.1) {
       const x = want.x + (cx - want.x) * t;
@@ -80,8 +102,8 @@ export function tablePlacement(head: Object3D, surfaces: Surface[]): Placement |
         [1, 1],
         [-1, 1],
       ].map(([a, b]) => ({
-        x: x + right.x * a * MAT_W * 0.45 + fwd.x * b * MAT_D * 0.45,
-        z: z + right.z * a * MAT_W * 0.45 + fwd.z * b * MAT_D * 0.45,
+        x: x + right.x * a * MAT_W * 0.5 + forward.x * b * MAT_D * 0.5,
+        z: z + right.z * a * MAT_W * 0.5 + forward.z * b * MAT_D * 0.5,
       }));
       if (corners.every((c) => pointInPolygon(c.x, c.z, poly))) {
         spot = { x, z };
@@ -113,8 +135,8 @@ export function tablePlacement(head: Object3D, surfaces: Surface[]): Placement |
     if (score < bestScore) {
       bestScore = score;
       best = {
-        position: new Vector3(spot.x, height + 0.003, spot.z),
-        yaw,
+        position: new Vector3(spot.x, height + 0.001, spot.z),
+        yaw: alignedYaw,
         onSurface: true,
         label: label || 'surface',
       };
