@@ -26,7 +26,7 @@ import type { CreatureKind } from './levels.js';
 import { VoxelGrid, voxelize } from './voxel.js';
 
 /** Grains of light through the volume. */
-const SAND = 15000;
+const SAND = 5000;
 
 const VERT = /* glsl */ `
 varying vec3 vLocal;
@@ -89,7 +89,7 @@ void main() {
       float cut = exp(-pow((wy - uScanY) * 210.0, 2.0));
       float shell = v.r * v.r;
       // Mostly dark between the slices: a stack of scans, not a fog.
-      sum += uShell * shell * (0.07 + 1.5 * slice) * near;
+      sum += uShell * shell * (0.2 + 0.55 * slice) * near;
       sum += uCore * v.g * (0.5 + 1.7 * slice) * near;
       sum += vec3(0.8, 0.97, 1.0) * (shell + v.g) * cut * 1.5;
       mass += shell * 0.5 + v.g * 0.7;
@@ -135,7 +135,7 @@ varying vec3 vC;
 varying float vA;
 void main() {
   float d = length(gl_PointCoord - 0.5) * 2.0;
-  gl_FragColor = vec4(mix(vC, vec3(1.0), 0.2) * (1.0 - d * d) * vA * 0.55, 0.0);
+  gl_FragColor = vec4(mix(vC, vec3(1.0), 0.2) * (1.0 - d * d) * vA * 0.32, 0.0);
 }`;
 
 interface Baked {
@@ -195,7 +195,7 @@ function bake(kind: CreatureKind): Baked {
       tris.push(v.x, v.y, v.z);
     }
   });
-  const grid = voxelize(tris, 84, 0.012, 0.03);
+  const grid = voxelize(tris, 84, 0.0045, 0.03);
   const tex = new Data3DTexture(grid.data, grid.nx, grid.ny, grid.nz);
   tex.format = RGFormat;
   tex.type = UnsignedByteType;
@@ -236,7 +236,7 @@ export class HoloVolume {
           uHalf: { value: b.half },
           uShell: { value: new Color(shell) },
           uCore: { value: new Color(core) },
-          uGain: { value: 10 },
+          uGain: { value: 5 },
           uTime: HOLO_TIME,
           uScanY: { value: -99 },
           uBands: { value: 240 },

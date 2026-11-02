@@ -1,5 +1,5 @@
 /** Bias Three r185's depth pre-pass without patching the hologram shaders. */
-import { ShaderMaterial, Vector2, type Mesh, type World } from '@iwsdk/core';
+import { AlwaysDepth, BoxGeometry, Mesh, Object3D, ShaderMaterial, Vector2, type World } from '@iwsdk/core';
 
 const BIAS = 0.03;
 const fragmentShader = `
@@ -33,15 +33,39 @@ void main() {
   gl_FragDepth = min(1.0, f == 0.0 ? 1.0 - n / metres : f * (metres - n) / (metres * (f - n)));
 }`;
 
-export function installRealDepth(world: World) {
+/**
+ * The play area stays visible whatever stands on the desk: this box resets the
+ * real depth to far inside its outline, right after the depth pass. Tracked
+ * hands still hide the paper, since their capsules write depth later.
+ */
+function playVolume(width: number, height: number, depth: number): Mesh {
+  const box = new BoxGeometry(width, height, depth);
+  box.translate(0, height / 2, 0);
+  const mesh = new Mesh(box, new ShaderMaterial({
+    vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'void main() { gl_FragDepth = 1.0; }',
+    colorWrite: false,
+    depthFunc: AlwaysDepth,
+  }));
+  mesh.name = 'PlayVolume';
+  mesh.renderOrder = -1000;
+  mesh.raycast = () => {};
+  mesh.visible = false;
+  return mesh;
+}
+
+export function installRealDepth(world: World, area: Object3D, width: number, height: number, depth: number) {
   const xr = world.renderer.xr;
   const original = xr.getDepthSensingMesh.bind(xr);
   const near = new Vector2();
   const far = new Vector2();
   let patched: Mesh | null = null;
   let enabled = true;
+  const volume = playVolume(width, height, depth);
+  area.add(volume);
   const pass = () => {
     const mesh = enabled ? original() : null;
+    volume.visible = !!mesh;
     if (!mesh) return null;
     if (mesh !== patched) {
       const stock = mesh.material as ShaderMaterial;

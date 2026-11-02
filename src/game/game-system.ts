@@ -51,6 +51,7 @@ import { decodeFolds, encodeFolds, formatCode } from './share.js';
 import { Menagerie } from './menagerie.js';
 import { Occluders } from './occluders.js';
 import { installRealDepth } from './real-depth.js';
+import { MAT_D, MAT_W } from './board-view.js';
 import { PalmMenu } from './palm-menu.js';
 import { TitleCard } from './title.js';
 import { loadSettings, MAT_STEP, saveSettings, SettingsPanel, SettingsState } from './settings.js';
@@ -207,7 +208,6 @@ export class GameSystem extends createSystem({
 
   init(): void {
     this.world.renderer.xr.setFramebufferScaleFactor(1.2);
-    const realDepth = installRealDepth(this.world);
     this.landing = document.getElementById('landing');
     // Soft room light for the mat, buttons and creatures.
     // Soft studio light: a warm window key that casts the only shadows (a
@@ -327,6 +327,7 @@ export class GameSystem extends createSystem({
     this.menu.hands = this.hands;
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
+    const realDepth = installRealDepth(this.world, this.game.boardRoot, MAT_W + 0.04, 0.55, MAT_D + 0.04);
     this.game.boardRoot.add(this.title.paper);
     this.title.onGathered = () => {
       if (this.titleOnMat && !this.game.solved) this.game.hidePaper(false);
@@ -608,14 +609,11 @@ export class GameSystem extends createSystem({
       if (c) {
         this.stage.setCallout(1, a, [0, 0, 0], 0.19, -0.03, `FOLDS ${c.result.folds} PAR ${c.result.par}`, `${c.result.stars} OF 3 STARS`);
       }
-      this.stage.setCallout(2, b, [0, 0, 0], -0.19, 0.05, `${p.c.facets} FACETS`, `${this.game.paper.facets.length} PANELS IN THE SHEET`);
+      this.stage.setCallout(2, b, [0, 0, 0], -0.19, 0.05, `${p.c.facets} FACETS`, `REAL ${p.c.realSpanCm} CM  SCAN x${p.c.magnification.toFixed(1)}`);
       this.stage.setCallout(3, d, [0, 0, 0], -0.19, -0.05, 'VITALS', 'FORMING');
     }
     if (p) {
       p.c.setScan(this.stage.scanY);
-      // Pulled apart once, mid-turn, to show how it is made.
-      const e = Math.sin(Math.min(1, Math.max(0, (p.left - 0.9) / 2.2)) * Math.PI);
-      p.c.setExplode(0.013 * e * e);
       this.stage.setAwake(p.awake);
       if (p.awake) {
         if (!this.wasAwake) this.stage.setCallout(3, p.c.anchors[3], [0, 0, 0], -0.19, -0.05, 'VITALS', 'AWAKE');
@@ -656,7 +654,7 @@ export class GameSystem extends createSystem({
     const [head, a, b] = c.anchors;
     this.stage.setCallout(0, head, [0, 0, 0], 0.2, 0.07, kind.toUpperCase(), times > 0 ? `FOLDED ${times} ${times === 1 ? 'TIME' : 'TIMES'}` : 'IN YOUR ZOO');
     this.stage.setCallout(1, a, [0, 0, 0], 0.2, -0.03, `${c.facets} FACETS`, `${HABITAT[kind].toUpperCase()} HABITAT`);
-    this.stage.setCallout(2, b, [0, 0, 0], -0.2, 0.04, 'INNER LAYER', `SCAN x${c.magnification.toFixed(1)}  REAL ${c.realSpanCm} CM`);
+    this.stage.setCallout(2, b, [0, 0, 0], -0.2, 0.04, 'REAL SIZE', `${c.realSpanCm} CM  SCAN x${c.magnification.toFixed(1)}`);
     sfx.power();
   }
 
@@ -706,8 +704,8 @@ export class GameSystem extends createSystem({
     }
     d.c.root.rotation.y = d.yaw;
     d.t += dt;
-    const breathe = 0.5 - 0.5 * Math.cos(d.t * 0.7);
-    d.c.setExplode(Math.max(0.013 * breathe * breathe, 0.05 * d.pull));
+    // Facets only part when the player pulls them: at rest the scan is exact.
+    d.c.setExplode(0.05 * d.pull);
     d.c.setScan(this.stage.scanY);
     if (d.lesson?.update(dt, turn, d.pull) || d.idle > INSPECT_SECONDS) this.endInspect();
   }

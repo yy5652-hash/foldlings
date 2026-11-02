@@ -77,7 +77,7 @@ export class Creature {
     const bounds = new Box3().setFromObject(this.rig.body);
     const size = bounds.getSize(this.v);
     this.modelSpan = Math.max(size.x, size.y, size.z);
-    this.scanScale = Math.max(0.9, Math.min(2.6, 0.5 / Math.max(this.modelSpan, 0.05)));
+    this.scanScale = Math.max(0.9, Math.min(2.6, 0.4 / Math.max(this.modelSpan, 0.05)));
     if (this.habitat === 'ground' || this.habitat === 'perch') this.rig.body.position.y -= bounds.min.y;
     this.bob.add(this.rig.body);
     this.root.add(this.bob);
@@ -310,7 +310,8 @@ export class Creature {
   /** Shows the inner layer while the creature is on the projection table. */
   setPresenting(on: boolean) {
     this.presenting = on;
-    for (const c of this.rig.cores) c.visible = on;
+    // Real paper has its inner side to show; only a schematic solid needs a core.
+    for (const c of this.rig.cores) c.visible = on && !this.rig.morph;
     if (on && !this.volume) {
       this.volume = new HoloVolume(this.kind, this.paperLook.front, this.paperLook.back);
       this.volume.mesh.position.y += this.rig.body.position.y;
@@ -321,7 +322,7 @@ export class Creature {
     this.rig.holo.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.0105 : 0.0058;
     this.rig.core.uniforms.uThick.value = this.rig.morph ? 0.0016 : on ? 0.008 : 0.0058;
     // Thick layers overlap, so each one burns lower to keep the form readable.
-    this.rig.holo.uniforms.uGlow.value = on ? 0.6 : 1;
+    this.rig.holo.uniforms.uGlow.value = on && !this.rig.morph ? 0.6 : 1;
     this.rig.core.uniforms.uGlow.value = on ? 0.52 : 0.8;
     if (!on && this.volume) {
       this.bob.remove(this.volume.mesh, this.volume.sand);
@@ -362,11 +363,12 @@ export class Creature {
   }
 
   get restScale(): number {
-    return this.realSpanCm / (100 * this.modelSpan);
+    // A baked model already is what the 20 cm sheet folds into.
+    return this.rig.morph ? 1 : REAL_SPAN[this.kind] / (100 * this.modelSpan);
   }
 
   get realSpanCm(): number {
-    return REAL_SPAN[this.kind];
+    return this.rig.morph ? Math.round(this.modelSpan * 1000) / 10 : REAL_SPAN[this.kind];
   }
 
   get magnification(): number {
