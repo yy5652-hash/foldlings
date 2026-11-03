@@ -192,8 +192,18 @@ export const sfx = {
     tone(800, 0.06, 0.05, 0.02, 'sine');
   },
   solved() {
-    const notes = [523.25, 659.25, 783.99, 1046.5];
-    notes.forEach((f, i) => bell(f, 0.14, i * 0.09));
+    // A grounded chord with a bright edge, all gone within 0.7 seconds.
+    tone(130.81, 0.65, 0.16);
+    tone(164.81, 0.58, 0.09);
+    tone(196, 0.58, 0.09);
+    tone(523.25, 0.38, 0.08, 0.03);
+  },
+  combo(multiplier: number) {
+    const pitch = 1 + (Math.min(5, multiplier) - 2) * 0.12;
+    for (let i = 0; i < 4; i++) tone(BEAT_NOTES[i] * pitch, 0.22, 0.07, i * 0.065);
+  },
+  tick() {
+    tone(880, 0.045, 0.045, 0, 'triangle');
   },
   pop() {
     tone(420, 0.09, 0.15, 0, 'sine');

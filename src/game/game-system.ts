@@ -22,8 +22,11 @@ import {
   PokeInteractable,
   RayInteractable,
 } from '@iwsdk/core';
-import { FoldSpec, paperBounds } from '../fold/paper.js';
+import { FoldSpec, PaperState, paperBounds } from '../fold/paper.js';
 import { Pause } from './pause.js';
+import { Combo } from './combo.js';
+import { FlashFold, flashPool } from './flash-fold.js';
+import { GameFeel } from './game-feel.js';
 import { SavedSheet, savedSheets, serialiseSheet, storeSheet, validateSheet } from './resume.js';
 import { streak } from './streak.js';
 import { FoldGame } from './fold-game.js';
@@ -83,6 +86,8 @@ interface SavedMat {
 }
 
 interface Progress {
+  bestCombo?: number;
+  flashBest?: number;
   level: number;
   solved: string[];
   /** Best stars and fewest folds per level id. */
@@ -118,7 +123,14 @@ export class GameSystem extends createSystem({
   game!: FoldGame;
   private room!: RoomFrame;
   private zoo!: Menagerie;
-  private progress: Progress = { level: 0, solved: [], best: {}, version: 2 };
+  private progress: Progress = { level: 0, solved: [], best: {}, version: 2, bestCombo: 0, flashBest: 0 };
+  private combo = new Combo();
+  private feel = new GameFeel();
+  private flashRun: FlashFold | null = null;
+  private flashResult = false;
+  private flashTickSecond = -1;
+  private skipFlashDelta = false;
+  private flashReturn: { level: Level; index: number; daily: boolean; free: boolean; sheet: SavedSheet } | null = null;
   private openingShared = false;
   private sessionTime = -1;
   private desktopTime = 0;
@@ -250,27 +262,19 @@ export class GameSystem extends createSystem({
     this.game = new FoldGame(this.world, {
       onRecenter: () => this.place(true),
       onOpened: () => {
-        const sheet = this.openingShared ? null : this.progress.sheets?.find((slot) => slot.id === this.game.level.id);
-        if (sheet) this.game.restoreSheet(sheet);
-        this.saveSheet();
+        if (!this.flashRun) {
+          const sheet = this.openingShared ? null : this.progress.sheets?.find((slot) => slot.id === this.game.level.id);
+          if (sheet) this.game.restoreSheet(sheet);
+          this.saveSheet();
+        }
         if (this.island) {
           this.island.setCurrentWorld(this.game.level.world);
           this.refreshIsland();
         }
       },
       onChanged: () => this.saveSheet(),
-      onSolved: (level, _paper, _root, result) => {
-        this.progress.sheet = null;
-        this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== level.id);
-        this.saveProgress();
-        this.zoo.cheer();
-        if (level.world >= 0) {
-          // Preview the new terrace now; durable scoring still happens at reveal.
-          if (!this.progress.solved.includes(level.id)) this.refreshIsland([...this.progress.solved, level.id], true);
-          this.island.celebrate(level.world);
-        }
-        this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.inspectSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
-      },
+      onComboBreak: () => this.combo.break(),
+      onSolved: (level, paper, _root, result) => this.onSolve(level, paper, result),
       onDaily: () => this.toggleDaily(),
       footer: () => {
         const n = this.zoo.count;
@@ -286,6 +290,7 @@ export class GameSystem extends createSystem({
     this.album = new Album(this.world);
     this.album.onInspect = (kind, look, times) => this.inspect(kind, look, times);
     this.resultCard = new ResultCard(this.world, this.game.boardEntity, (a) => this.afterResult(a));
+    this.world.createTransformEntity(this.feel.root, this.game.boardEntity);
     this.world.createTransformEntity(this.badge.root, this.game.boardEntity);
     this.badge.root.position.set(0, 0.36, -0.12);
     this.zoo.onAwake = () => {
@@ -320,7 +325,8 @@ export class GameSystem extends createSystem({
     });
     this.island = new WorldIsland({
       play: (i) => this.playCampaignLevel(i),
-      canPlay: () => !this.game.busy && !this.game.inputLocked && !this.celebrate &&
+      flash: () => this.startFlash(),
+      canPlay: () => !this.flashRun && !this.paused && !this.game.busy && !this.game.inputLocked && !this.celebrate &&
         !this.title.playing && !this.demo && !this.roomModel.showing && !this.menu.isOpen &&
         !this.album.isOpen && !this.levelSelect.isOpen && !this.settingsPanel.isOpen && !this.resultCard.showing,
     });
@@ -329,7 +335,8 @@ export class GameSystem extends createSystem({
     this.island.root.position.set(0, ISLAND_PLACEMENT.height, -MAT_D / 2 - ISLAND_PLACEMENT.beyondMat);
     this.island.root.rotation.x = ISLAND_PLACEMENT.tilt;
     this.island.root.scale.setScalar(ISLAND_PLACEMENT.scale);
-    for (const hit of this.island.hits) {
+    this.feel.anchorIsland(this.island.root.position);
+    for (const hit of [...this.island.hits, this.island.hub]) {
       const entity = this.world.createTransformEntity(hit, islandEntity);
       entity.addComponent(RayInteractable);
       entity.addComponent(PokeInteractable);
@@ -349,6 +356,7 @@ export class GameSystem extends createSystem({
       } },
     ]);
     this.menu.hands = this.hands;
+    this.menu.onOpen = () => { if (this.flashRun) this.leaveFlash(); };
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
     const realDepth = installRealDepth(this.world, this.game.boardRoot, MAT_W + 0.1, 0.75, MAT_D + 0.04, 0.85);
@@ -440,6 +448,13 @@ export class GameSystem extends createSystem({
             framebufferHeight: layer ? ('framebufferHeight' in layer ? layer.framebufferHeight : layer.textureHeight) : 0,
           };
         },
+        combo: () => this.combo.value,
+        flash: (seed = Date.now()) => this.startFlash(seed),
+        flashState: () => this.flashRun ? {
+          active: this.flashRun.active, remaining: this.flashRun.remaining, score: this.flashRun.score,
+          current: this.flashRun.current, level: LEVELS[this.flashRun.current].id,
+          paused: this.paused, result: this.flashResult, best: this.progress.flashBest ?? 0,
+        } : null,
         island: () => this.island,
         fov: () => viewFov(this.world),
         forceFov: (left = 37, right = 37, up = 25, down = 43) => viewFov(this.world).force({ left, right, up, down }),
@@ -452,9 +467,11 @@ export class GameSystem extends createSystem({
         deliverToday: () => { this.deliveryForced = true; },
         placement: () => this.placed && { label: this.placed.label, onSurface: this.placed.onSurface, p: this.placed.position.toArray().map((v) => +v.toFixed(2)) },
         resetAll: () => {
+          if (this.flashRun) this.leaveFlash();
+          this.combo.break();
           this.clearDelivery();
           this.zoo.reset();
-          this.progress = { level: 0, solved: [], daily: [], muted: false, best: {}, version: 2 };
+          this.progress = { level: 0, solved: [], daily: [], muted: false, best: {}, version: 2, bestCombo: 0, flashBest: 0 };
           this.saveProgress();
           this.game.loadLevel(0);
         },
@@ -567,6 +584,7 @@ export class GameSystem extends createSystem({
         this.paused = false;
         resumeAudio();
         this.game.resume();
+        this.skipFlashDelta = true;
         if (action === 'remind') this.game.say('Picked up where you left off', 3);
       }
     }));
@@ -912,6 +930,7 @@ export class GameSystem extends createSystem({
   }
 
   private updateDelivery(dt: number) {
+    if (this.flashRun) return;
     this.dailySheet.update(dt);
     this.deliveryClock -= dt;
     if (this.deliveryClock <= 0) {
@@ -1069,6 +1088,7 @@ export class GameSystem extends createSystem({
     this.menu.menuHand = state.leftHanded ? 'right' : 'left';
     this.game.setLeftHanded(state.leftHanded);
     this.game.setReduceMotion(state.reduceMotion);
+    this.feel.setReduceMotion(state.reduceMotion);
     this.zoo.setReduceMotion(state.reduceMotion);
     if (state.reduceMotion) {
       this.title.stop();
@@ -1088,6 +1108,7 @@ export class GameSystem extends createSystem({
   }
 
   private saveSheet() {
+    if (this.flashRun) return;
     this.progress.sheet = this.game.isFree || this.game.solved ? null : serialiseSheet(this.game.level.id, this.game.playedFolds, this.game.wasHinted);
     if (this.progress.sheet) this.progress.sheets = storeSheet(this.progress.sheets ?? [], this.progress.sheet);
     else if (!this.game.isFree) this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== this.game.level.id);
@@ -1113,6 +1134,102 @@ export class GameSystem extends createSystem({
     this.saveProgress();
     this.game.loadLevel(index);
     this.game.hidePaper(false);
+  }
+
+  private onSolve(level: Level, paper: PaperState, result: Result) {
+    if (this.flashRun) {
+      if (this.flashRun.solve()) {
+        this.island.celebrate(level.world);
+        this.feel.burst(paper, this.island.root.position);
+        this.loadFlashPuzzle();
+        this.updateFlash(0);
+      }
+      return;
+    }
+    const combo = level.world >= 0 ? this.combo.solve(result.folds, result.par, result.hinted) : 0;
+    this.progress.bestCombo = Math.max(this.progress.bestCombo ?? 0, combo);
+    if (combo >= 2) { this.feel.showCombo(combo); sfx.combo(combo); }
+    this.progress.sheet = null;
+    this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== level.id);
+    this.saveProgress();
+    this.zoo.cheer();
+    if (level.world >= 0) {
+      // Preview the new terrace now; durable scoring still happens at reveal.
+      if (!this.progress.solved.includes(level.id)) this.refreshIsland([...this.progress.solved, level.id], true);
+    }
+    this.island.celebrate(level.world >= 0 ? level.world : LEVELS[this.progress.level]?.world ?? 0, combo);
+    this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.inspectSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
+  }
+
+  /** Start only from an idle mat; interrupted work is restored on Done or Menu. */
+  private startFlash(seed = Date.now()): boolean {
+    if (this.flashRun || this.paused || this.game.busy || this.game.inputLocked || this.game.solved || this.celebrate ||
+      this.title.playing || this.titleQueued || this.demo || this.roomModel.showing || this.menu.isOpen || this.album.isOpen ||
+      this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing) return false;
+    this.saveSheet();
+    this.flashReturn = { level: this.game.level, index: this.game.levelIndex, daily: this.game.isDaily,
+      free: this.game.isFree, sheet: { id: this.game.level.id, played: this.game.playedFolds, hinted: this.game.wasHinted } };
+    this.flashRun = new FlashFold(flashPool(LEVELS, this.progress.solved), seed);
+    this.flashResult = false;
+    this.flashTickSecond = -1;
+    this.clearDelivery();
+    this.feel.clear();
+    this.loadFlashPuzzle();
+    this.updateFlash(0);
+    return true;
+  }
+
+  private loadFlashPuzzle() {
+    this.game.loadLevel(this.flashRun!.current);
+    this.game.readyPaper();
+  }
+
+  private updateFlash(dt: number) {
+    const run = this.flashRun;
+    if (!run || this.flashResult) return;
+    run.tick(dt);
+    this.feel.clock(run.remaining);
+    this.island.setFlashClock(run.remaining);
+    if (!run.active) {
+      this.flashResult = true;
+      this.progress.flashBest = Math.max(this.progress.flashBest ?? 0, run.score);
+      this.saveProgress();
+      this.feel.clear();
+      this.game.pause();
+      this.game.inputLocked = true;
+      this.game.hidePaper(true);
+      this.resultCard.showFlash(run.score, this.progress.flashBest);
+      return;
+    }
+    const second = Math.ceil(run.remaining);
+    if (second !== this.flashTickSecond) {
+      this.flashTickSecond = second;
+      if (second <= 10) sfx.tick();
+    }
+  }
+
+  private leaveFlash() {
+    if (!this.flashRun) return;
+    this.flashRun.cancel();
+    const back = this.flashReturn;
+    if (this.flashResult) this.game.resume();
+    this.game.inputLocked = false;
+    this.flashResult = false;
+    this.resultCard.hide();
+    this.feel.clear();
+    this.game.board.stopImpact();
+    this.island.setFlashClock(null);
+    // Keep the run object until load/restore completes so onOpened cannot write a challenge sheet.
+    if (back) {
+      if (back.free) this.game.loadFree(back.level);
+      else if (back.daily) this.game.loadDaily(back.level, this.dailySubtitle());
+      else if (back.level.world < 0) this.game.loadCustom(back.level, 'My puzzle');
+      else this.game.loadLevel(back.index);
+      this.game.restoreSheet(back.sheet);
+    }
+    this.flashRun = null;
+    this.flashReturn = null;
+    this.refreshIsland();
   }
 
   private refreshIsland(solved: readonly string[] = this.progress.solved, animate = false) {
@@ -1244,6 +1361,11 @@ export class GameSystem extends createSystem({
 
   /** What the result card asked for: the next level, another try, or the level list. */
   private afterResult(action: ResultAction) {
+    if (this.flashResult) {
+      this.leaveFlash();
+      if (action === 'retry') this.startFlash();
+      return;
+    }
     const last = this.lastLevel;
     if (action === 'retry' && last) {
       if (last.world === -1) this.game.loadDaily(last, 'Daily Fold');
@@ -1262,6 +1384,8 @@ export class GameSystem extends createSystem({
 
   update(delta: number, time: number): void {
     if (this.paused) return;
+    this.updateFlash(this.skipFlashDelta ? 0 : delta);
+    this.skipFlashDelta = false;
     delta = Math.min(delta, 0.1);
     const frame = this.world.session ? this.world.renderer.xr.getFrame() : null;
     this.room.update(frame, delta);
@@ -1369,7 +1493,8 @@ export class GameSystem extends createSystem({
     this.settingsPanel.update(delta);
     this.island.setVisible(!this.title.playing && !this.demo && !this.album.isOpen &&
       !this.levelSelect.isOpen && !this.roomModel.showing && !this.menu.isOpen && !this.settingsPanel.isOpen && !this.resultCard.showing);
-    this.island.update(delta, this.handBodies.pinch);
+    this.island.update(delta, this.handBodies.pinch, this.settings.reduceMotion);
+    this.feel.update(delta);
     this.game.board.setCardAway(
       this.title.playing || !!this.celebrate || !!this.demo || this.roomModel.showing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
       delta,
@@ -1392,6 +1517,8 @@ const OLD_ORDER = ['crane', 'frog', 'boat', 'fish', 'fox', 'butterfly', 'rabbit'
 
 /** Brings an old save into the campaign: same next level, one star per solve. */
 export function migrate(p: Progress): Progress {
+  p.bestCombo = Number.isFinite(p.bestCombo) ? Math.max(0, Math.min(5, Math.floor(p.bestCombo!))) : 0;
+  p.flashBest = Number.isFinite(p.flashBest) ? Math.max(0, Math.floor(p.flashBest!)) : 0;
   p.sheets = savedSheets(p.sheets, p.sheet);
   p.inspectSeen ??= !!(p.solved?.length || p.daily?.length || Object.keys(p.best ?? {}).length);
   p.titleSeen ??= !!(p.solved?.length || p.daily?.length || Object.keys(p.best ?? {}).length);

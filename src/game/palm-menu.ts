@@ -42,6 +42,8 @@ export class PalmMenu {
   hands: Hands | null = null;
   /** True while the player is folding: no token, and the panel closes. */
   blocked = false;
+  /** Every menu entry path, including the palm token. */
+  onOpen?: () => void;
   private head = new Vector3();
   private wrist = new Vector3();
   private idx = new Vector3();
@@ -113,6 +115,7 @@ export class PalmMenu {
 
   /** Opens at chest height and a forearm away, above the mat where hands work. */
   open() {
+    this.onOpen?.();
     this.win.open(0.45, 0.06);
     this.openedAt = this.clock;
     sfx.pick();

@@ -18,12 +18,14 @@ vi.mock('./sfx.js', () => ({ sfx: { click: vi.fn(), error: vi.fn() } }));
 
 function fixture() {
   const play = vi.fn();
-  const island = new WorldIsland({ play, canPlay: () => true });
+  const flash = vi.fn();
+  let allowed = true;
+  const island = new WorldIsland({ play, flash, canPlay: () => allowed });
   const hands = {
     left: { tracked: false, on: false, at: new Vector3() },
     right: { tracked: false, on: false, at: new Vector3() },
   };
-  return { island, play, hands };
+  return { island, play, flash, hands, allow: (on: boolean) => { allowed = on; } };
 }
 function event(mesh: Mesh, type: string) {
   (mesh as unknown as { dispatchEvent(e: { type: string }): void }).dispatchEvent({ type });
@@ -261,6 +263,63 @@ describe('world island without a renderer', () => {
     expect(p.version).toBe(0);
   });
 
+  it('starts Flash Fold with hub ray/poke events or a fresh near-hand pinch, respecting modal guards', () => {
+    const { island, flash, play, hands, allow } = fixture();
+    event(island.hub, 'pointerenter');
+    island.update(.1, hands);
+    expect(island.root.getObjectByName('Flash_hub_label')!.visible).toBe(true);
+    event(island.hub, 'pointerdown');
+    expect(flash).toHaveBeenCalledTimes(1);
+    expect(play).not.toHaveBeenCalled();
+    island.update(.4, hands);
+    event(island.hub, 'pointerleave');
+    hands.right.tracked = hands.right.on = true;
+    hands.right.at.set(0, -.012, 0);
+    island.update(.01, hands);
+    island.update(.4, hands);
+    expect(flash).toHaveBeenCalledTimes(2);
+    hands.right.on = false;
+    island.update(.4, hands);
+    allow(false);
+    event(island.hub, 'pointerdown');
+    hands.right.on = true;
+    island.update(.1, hands);
+    expect(flash).toHaveBeenCalledTimes(2);
+    island.setVisible(false);
+    expect(island.hub.position.y).toBe(-50);
+    event(island.hub, 'pointerdown');
+    expect(flash).toHaveBeenCalledTimes(2);
+  });
+
+  it('drains the hub clockwise, strengthens combos, and suppresses solve waves for reduceMotion', () => {
+    const { island, hands } = fixture();
+    const ring = island.root.getObjectByName('Flash_clock_ring') as Mesh;
+    const wave = island.root.getObjectByName('Island_solve_wave') as Mesh;
+    const buffer = ring.geometry;
+    island.setFlashClock(60);
+    island.update(.1, hands);
+    expect(buffer.drawRange).toEqual({ start: 360, count: 720 });
+    island.setFlashClock(30);
+    island.update(.1, hands);
+    expect(buffer.drawRange).toEqual({ start: 720, count: 360 });
+    const pos = buffer.getAttribute('position');
+    // From twelve o'clock, vertices advance right: the consumed arc travels clockwise.
+    expect(pos.getZ(0)).toBe(0);
+    expect(pos.getX(1)).toBeGreaterThan(pos.getX(0));
+    island.celebrate(0, 1); island.update(.1, hands);
+    const normal = wave.scale.y;
+    island.celebrate(0, 5); island.update(.1, hands);
+    expect(wave.scale.y).toBeGreaterThan(normal);
+    island.update(.01, hands, true);
+    expect(wave.visible).toBe(false);
+    expect(ring.geometry).toBe(buffer);
+    island.update(.7, hands);
+    expect(wave.visible).toBe(false);
+    island.setFlashClock(0);
+    island.update(.1, hands, true);
+    expect(buffer.drawRange.count).toBe(0);
+  });
+
   it('stays within 24 draws with all eight creatures, hover, pulse and solve wave', () => {
     const { island, hands } = fixture();
     island.setCurrentWorld(0);
@@ -275,7 +334,7 @@ describe('world island without a renderer', () => {
       const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
       for (const m of materials) if (m.visible) calls += m.transparent && m.side === 2 && !m.forceSinglePass ? 2 : 1;
     });
-    expect(calls).toBe(16);
+    expect(calls).toBe(17);
     expect(calls).toBeLessThanOrEqual(24);
     console.info(`Island maximum structural draw estimate: ${calls}`);
   });

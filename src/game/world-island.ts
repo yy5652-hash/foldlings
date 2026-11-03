@@ -3,7 +3,7 @@
  */
 import {
   BufferGeometry, DoubleSide, EdgesGeometry,
-  Float32BufferAttribute, Group, LineLoop, LineSegments, Mesh, MeshBasicMaterial, Vector3,
+  CircleGeometry, RingGeometry, Float32BufferAttribute, Group, LineLoop, LineSegments, Mesh, MeshBasicMaterial, Vector3,
 } from '@iwsdk/core';
 import { TextLabel } from './glass.js';
 import { holoBody, holoLine } from './holo.js';
@@ -24,11 +24,21 @@ const noHit = () => {};
 export interface WorldIslandHost {
   play(index: number): void;
   canPlay(): boolean;
+  flash(): void;
 }
 
 export class WorldIsland {
   readonly root = new Group();
   readonly hits: Mesh[] = [];
+  readonly hub = new Mesh(new CircleGeometry(.03, 48), new MeshBasicMaterial({ visible: false, side: DoubleSide }));
+  private hubLabel = new TextLabel(.02);
+  private hubHovers = 0;
+  private flashRing = new Mesh(new RingGeometry(.031, .034, 180, 1, Math.PI / 2, -TAU), new MeshBasicMaterial({
+    color: 0xa4f3ff, transparent: true, opacity: .8, toneMapped: false, side: DoubleSide, depthWrite: false,
+  }));
+  private flashSeconds: number | null = null;
+  private waveStrength = 1;
+
   readonly progress: IslandProgress[] = [];
   private labels: TextLabel[] = [];
   private body = holoBody();
@@ -57,6 +67,25 @@ export class WorldIsland {
 
   constructor(private host: WorldIslandHost) {
     this.root.name = 'WorldIsland';
+    this.hub.name = 'Island_FlashFold';
+    this.hub.rotation.x = -Math.PI / 2;
+    this.hub.position.y = -.012;
+    this.flashRing.material.forceSinglePass = true;
+    this.hubLabel.mesh.name = 'Flash_hub_label';
+    this.hubLabel.set('FLASH FOLD');
+    this.hubLabel.mesh.position.set(0, .045, 0);
+    this.hubLabel.mesh.rotation.x = -Math.PI / 2;
+    this.hubLabel.mesh.raycast = this.flashRing.raycast = noHit;
+    this.hubLabel.mesh.visible = false;
+    this.flashRing.name = 'Flash_clock_ring';
+    this.flashRing.rotation.x = -Math.PI / 2;
+    this.flashRing.position.y = -.01;
+    this.root.add(this.hub, this.hubLabel.mesh, this.flashRing);
+    const hubEvents = this.hub as unknown as { addEventListener(type: string, cb: () => void): void };
+    hubEvents.addEventListener('pointerenter', () => this.hubHovers++);
+    hubEvents.addEventListener('pointerleave', () => { this.hubHovers = Math.max(0, this.hubHovers - 1); });
+    hubEvents.addEventListener('pointerdown', () => this.select(8));
+
     const all = new Facets();
     const edges: number[] = [], worlds: number[] = [], outlines: number[] = [], gaps: number[] = [];
     const hitMaterial = new MeshBasicMaterial({ visible: false, side: DoubleSide });
@@ -241,6 +270,9 @@ export class WorldIsland {
   setVisible(visible: boolean) {
     if (this.root.visible === visible) return;
     this.root.visible = visible;
+    this.hub.position.y = visible ? -.012 : -50;
+    this.hubHovers = 0;
+    this.hubLabel.mesh.visible = false;
     // Park hit surfaces too: pointer libraries can traverse invisible ancestors.
     for (let i = 0; i < this.hits.length; i++) {
       this.hits[i].position.y = visible ? this.lift[i] : -50;
@@ -249,8 +281,11 @@ export class WorldIsland {
     }
   }
 
-  celebrate(worldIndex: number) {
+  setFlashClock(seconds: number | null) { this.flashSeconds = seconds; }
+
+  celebrate(worldIndex: number, combo = 1) {
     if (!Number.isInteger(worldIndex) || worldIndex < 0 || worldIndex >= WORLDS.length) return;
+    this.waveStrength = 1 + .3 * (Math.max(1, Math.min(5, combo)) - 1);
     this.waveWorld = worldIndex;
     this.waveTime = 0;
     this.wave.visible = true;
@@ -260,6 +295,7 @@ export class WorldIsland {
   private select(worldIndex: number) {
     if (!this.root.visible || !this.host.canPlay() || this.clock-this.lastFire < .35) return;
     this.lastFire = this.clock;
+    if (worldIndex === 8) { sfx.click(); this.host.flash(); return; }
     if (!this.progress[worldIndex].unlocked) {
       this.shakeTime[worldIndex] = .35;
       sfx.error();
@@ -273,6 +309,7 @@ export class WorldIsland {
     this.local.copy(at);
     this.root.worldToLocal(this.local);
     const r = Math.hypot(this.local.x, this.local.z);
+    if (r < .03 && Math.abs(this.local.y + .012) < .035) return 8;
     if (r < INNER || r > RADIUS) return -1;
     const a = (Math.atan2(this.local.z, this.local.x) + TAU) % TAU;
     const within = a % SECTOR;
@@ -282,7 +319,7 @@ export class WorldIsland {
     return Math.abs(this.local.y-y) < .035 ? world : -1;
   }
 
-  update(dt: number, hands: HandBodies['pinch']) {
+  update(dt: number, hands: HandBodies['pinch'], reduceMotion = false) {
     this.clock += dt;
     this.waveTime = Math.min(1, this.waveTime+dt);
     let nearLeft = -1, nearRight = -1;
@@ -298,7 +335,7 @@ export class WorldIsland {
     for (let i = 0; i < WORLDS.length; i++) {
       const hovered = this.rayHovers[i] > 0 || i === nearLeft || i === nearRight;
       if (hovered) labelWorld = i;
-      this.hover[i] = (hovered ? 1 : 0) + (i === this.waveWorld ? Math.max(0, 1-this.waveTime/.8) : 0);
+      this.hover[i] = (hovered ? 1 : 0) + (!reduceMotion && i === this.waveWorld ? this.waveStrength * Math.max(0, 1-this.waveTime/.7) : 0);
       this.fillTime[i] = Math.min(1, this.fillTime[i]+dt);
       this.fill[i] = this.from[i] + (this.progress[i].solved-this.from[i])*this.fillTime[i];
       this.shakeTime[i] = Math.max(0, this.shakeTime[i]-dt);
@@ -311,10 +348,16 @@ export class WorldIsland {
     for (let i = 0; i < this.labels.length; i++) this.labels[i].mesh.visible = i === labelWorld;
     this.pulse.scale.setScalar(.024*(1+.1*Math.sin(this.clock*2)));
     this.pulse.material.opacity = .45+.3*Math.sin(this.clock*2);
-    this.wave.visible = this.waveTime < .8;
-    const radius = .012+(RADIUS-.012)*Math.min(1,this.waveTime/.8);
+    this.hubLabel.mesh.visible = this.flashSeconds === null && (this.hubHovers > 0 || nearLeft === 8 || nearRight === 8);
+    const segments = this.flashSeconds === null ? 180 : Math.max(0, Math.min(180, Math.ceil(this.flashSeconds * 2)));
+    this.flashRing.geometry.setDrawRange((180 - segments) * 6, segments * 6);
+    const urgent = this.flashSeconds !== null && this.flashSeconds <= 10;
+    this.flashRing.material.color.set(urgent ? (!reduceMotion && Math.sin(this.clock * 12) > 0 ? 0xff563f : 0xffb347) : 0xa4f3ff);
+    this.flashRing.material.opacity = urgent && !reduceMotion ? .65 + .35 * Math.sin(this.clock * 12) : .8;
+    this.wave.visible = !reduceMotion && this.waveTime < .7;
+    const radius = .012+(RADIUS-.012)*Math.min(1,this.waveTime/.7);
     // Solve wave expands across the volumetric island without rebuilding geometry.
-    this.wave.scale.set(radius, .03*Math.max(0,1-this.waveTime/.8), radius);
-    this.wave.material.opacity = Math.max(0,1-this.waveTime/.8);
+    this.wave.scale.set(radius * (1 + .1 * (this.waveStrength - 1)), .03 * this.waveStrength *Math.max(0,1-this.waveTime/.7), radius);
+    this.wave.material.opacity = Math.max(0,1-this.waveTime/.7) * Math.min(1, .55 * this.waveStrength);
   }
 }

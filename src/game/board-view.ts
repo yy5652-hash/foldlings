@@ -174,9 +174,26 @@ export class BoardView {
     depthWrite: false,
   });
   private clock = 0;
+  private impactTime = 1;
+  private impactOutline = new Mesh(new BufferGeometry(), new MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, depthTest: false, toneMapped: false,
+  }));
+  private impactWave = new Mesh(new RingGeometry(.94, 1, 96), new MeshBasicMaterial({
+    color: 0xadf5ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false,
+  }));
+
 
   constructor() {
     this.root.name = 'Board';
+    this.impactOutline.name = 'Solve_white_outline';
+    this.impactOutline.renderOrder = 65;
+    this.impactWave.name = 'Solve_mat_wave';
+    this.impactWave.rotation.x = -Math.PI / 2;
+    this.impactWave.position.y = .0015;
+    this.impactOutline.raycast = this.impactWave.raycast = () => {};
+    this.impactOutline.visible = this.impactWave.visible = false;
+    this.root.add(this.impactOutline, this.impactWave);
+
 
     // A dark plate etched with the lattice; the texture spans the whole mat.
     const [matCanvas, matTex] = canvasTexture(2048, 2048);
@@ -503,7 +520,7 @@ export class BoardView {
     this.mini = holder;
   }
 
-  private buildOutline(facets: readonly Facet[]) {
+  private outlineGeometry(facets: readonly Facet[]): BufferGeometry {
     const segs = unionOutline(facets.map((f) => f.poly));
     const pos: number[] = [];
     const w = this.highContrast ? 0.0024 : 0.0012;
@@ -530,10 +547,14 @@ export class BoardView {
         for (const i of [0, 1, 2, 0, 2, 3]) pos.push(q[i][0], y, -q[i][1]);
       }
     }
-    this.outline.geometry.dispose();
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(pos, 3));
-    this.outline.geometry = g;
+    return g;
+  }
+
+  private buildOutline(facets: readonly Facet[]) {
+    this.outline.geometry.dispose();
+    this.outline.geometry = this.outlineGeometry(facets);
   }
 
   setHighContrast(on: boolean) {
@@ -546,9 +567,34 @@ export class BoardView {
     (this.hintLine.material as MeshBasicMaterial).color.set(on ? 0xffffff : 0xffd166);
   }
 
+  /** Independent copy survives the next puzzle loading immediately in Flash Fold. */
+  solveImpact(facets: readonly Facet[], reduceMotion: boolean) {
+    this.stopImpact();
+    if (reduceMotion) return;
+    this.impactOutline.geometry.dispose();
+    this.impactOutline.geometry = this.outlineGeometry(facets);
+    this.impactTime = 0;
+    this.impactOutline.visible = this.impactWave.visible = true;
+  }
+
+  stopImpact() {
+    this.impactTime = 1;
+    this.impactOutline.visible = this.impactWave.visible = false;
+  }
+
   /** Gentle breathing of the goal outline. */
   update(dt: number) {
     this.clock += dt;
+    if (this.impactTime < .65) {
+      this.impactTime += dt;
+      const t = this.impactTime / .65;
+      this.impactOutline.visible = this.impactTime < .16;
+      this.impactOutline.material.opacity = Math.max(0, 1 - this.impactTime / .16);
+      this.impactWave.visible = t < 1;
+      this.impactWave.scale.set(.02 + .23 * t, .02 + .20 * t, 1);
+      this.impactWave.material.opacity = Math.max(0, (1 - t) * .8);
+    }
+
     this.outlineMat.opacity = this.highContrast || this.warm ? 1 : 0.55 + 0.3 * (0.5 + 0.5 * Math.sin(this.clock * 2.4));
     this.hintT += dt;
     if (this.hintRing.visible) {

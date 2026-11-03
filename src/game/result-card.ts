@@ -75,6 +75,8 @@ class PillButton {
     t.addEventListener('pointerleave', () => (this.hovers = Math.max(0, this.hovers - 1)));
   }
 
+  setLabel(text: string) { this.label.set(text.toUpperCase()); }
+
   /** The white fill, 0..1. */
   setFill(k: number) {
     this.surface.setFill(k, [1, 1, 1]);
@@ -108,6 +110,9 @@ export class ResultCard {
   private pullProgress = 0;
   private stars: Mesh[] = [];
   private next: PillButton;
+  private retry: Button;
+  private levels: Button;
+  private flashMode = false;
   private controls: { update(dt: number): void }[] = [];
   private t = -1;
   private earned = 0;
@@ -148,8 +153,8 @@ export class ResultCard {
     this.next = add(new PillButton('Next', 0.11, 0.036, true, () => this.fire('next')), 'Result_next');
     this.next.root.position.set(0, y, 0.012);
     this.next.baseZ = 0.012;
-    const retry = add(new Button('restart', () => this.fire('retry'), '', { r: 0.02 }), 'Result_retry');
-    const levels = add(new Button('levels', () => this.fire('levels'), '', { r: 0.02 }), 'Result_levels');
+    const retry = this.retry = add(new Button('restart', () => this.fire('retry'), '', { r: 0.02 }), 'Result_retry');
+    const levels = this.levels = add(new Button('levels', () => this.fire('levels'), '', { r: 0.02 }), 'Result_levels');
     retry.root.position.set(-0.084, y, 0.012);
     levels.root.position.set(0.084, y, 0.012);
     retry.root.rotation.x = levels.root.rotation.x = Math.PI / 2;
@@ -166,6 +171,11 @@ export class ResultCard {
   }
 
   show(title: string, sub: string, r: Result, best: Best | undefined, banner = '') {
+    this.flashMode = false;
+    this.next.setLabel('Next');
+    this.retry.setLabel('');
+    this.levels.setVisible(true);
+    for (const star of this.stars) star.visible = true;
     this.earned = r.stars;
     this.perfect = r.perfect;
     this.popped = 0;
@@ -188,6 +198,27 @@ export class ResultCard {
     for (const pull of this.pulls) pull.reset(true);
     this.win.content.scale.x = this.win.content.scale.y;
     this.win.content.position.x = 0;
+  }
+
+  showFlash(solved: number, best: number) {
+    this.show('Flash Fold', '', { stars: 1, folds: 0, par: 0, hinted: false, perfect: false }, undefined);
+    this.flashMode = true;
+    this.next.setLabel('Done');
+    this.retry.setLabel('Retry');
+    this.levels.setVisible(false);
+    for (const star of this.stars) star.visible = false;
+    this.pill.mesh.visible = this.pillText.mesh.visible = false;
+    const g = this.win.clear();
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = INK.primary;
+    setFont(g, 58, 400, 2, DISPLAY);
+    g.fillText('FLASH FOLD', PX / 2, 190, PX - 120);
+    g.fillStyle = INK.gold;
+    setFont(g, 52, 600);
+    g.fillText(`${solved} SOLVED · BEST ${best}`, PX / 2, 300, PX - 100);
+    this.win.commit();
+    this.next.setFill(0);
   }
 
   hide() {
@@ -258,6 +289,7 @@ export class ResultCard {
     const scale = this.win.content.scale.y;
     this.win.content.scale.x = scale * (1 - this.pullProgress * 0.95);
     this.win.content.position.x = -W / 2 * scale * this.pullProgress * 0.95;
+    if (this.flashMode) return;
     // Stars light one by one, each with its own note.
     const due = Math.min(this.earned, Math.floor((this.t - 0.3) / 0.32) + 1);
     while (this.popped < due) {

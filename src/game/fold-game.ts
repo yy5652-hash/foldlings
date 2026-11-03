@@ -103,6 +103,7 @@ const NEAR_MARGIN = 0.025;
 
 export interface FoldGameEvents {
   onSolved?: (level: Level, paper: PaperState, boardRoot: Group, result: Result) => void;
+  onComboBreak?: () => void;
   onRecenter?: () => void;
   onOpened?: () => void;
   onChanged?: () => void;
@@ -292,6 +293,7 @@ export class FoldGame {
 
   setReduceMotion(on: boolean) {
     this.reduceMotion = on;
+    if (on) this.board.stopImpact();
     if (on && this.drop >= 0) this.updateDrop(0);
   }
 
@@ -517,6 +519,7 @@ export class FoldGame {
     sfx.undo();
     this.paper = prev;
     this.folds = Math.max(0, this.folds - 1);
+    if (this.folds === 0) this.events.onComboBreak?.();
     this.creases.length = this.creaseHistory.pop() ?? 0;
     this.textures.redraw(this.creases);
     this.paperView.setPaper(this.paper);
@@ -533,6 +536,7 @@ export class FoldGame {
       return;
     }
     this.hinted = true;
+    this.events.onComboBreak?.();
     this.events.onChanged?.();
     const next = this.nextFold();
     const pts = next ? this.nextFoldPoints() : null;
@@ -999,10 +1003,10 @@ export class FoldGame {
     this.updateDrop(dt);
     if (this.drag && !this.handGrace.frozen) this.updateDrag(dt);
     if (this.settle) this.updateSettle(dt);
-    this.glow = Math.max(0, this.glow - dt * 1.2);
+    this.glow = Math.max(0, this.glow - dt * 1.5);
     // A soft pulse while the fold under the hand would solve the puzzle.
     const warm = this.drag?.solves ? 0.22 + 0.12 * Math.sin(this.time * 9) : 0;
-    this.paperView.setGlow(this.glow > 0 ? Math.sin(this.glow * Math.PI) : warm);
+    this.paperView.setGlow(this.reduceMotion ? 0 : this.glow > 0 ? Math.sin(this.glow * Math.PI) : warm);
   }
 
   /** Shows a short line on the caption strip for a few seconds. */
@@ -1221,6 +1225,7 @@ export class FoldGame {
       this.glow = 1;
       this.board.setGhostOpacity(0);
       this.board.setOutlineVisible(false);
+      this.board.solveImpact(this.paper.facets, this.reduceMotion);
       sfx.solved();
       this.events.onSolved?.(this.level, this.paper, this.boardRoot, scoreSolve(this.folds, this.level.par, this.hinted));
     }
