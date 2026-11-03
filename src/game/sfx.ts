@@ -179,6 +179,11 @@ export const sfx = {
   cancel() {
     rustle(0.15, 1400, 1, 0.15);
   },
+  /** A locked holographic world: a short descending pair. */
+  error() {
+    tone(240, 0.09, 0.06, 0, 'sine');
+    tone(160, 0.12, 0.05, 0.07, 'sine');
+  },
   undo() {
     rustle(0.18, 1500, 0.8, 0.22);
   },

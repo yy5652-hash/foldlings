@@ -38,9 +38,10 @@ void main() {
  * real depth to far inside its outline, right after the depth pass. Tracked
  * hands still hide the paper, since their capsules write depth later.
  */
-function playVolume(width: number, height: number, depth: number): Mesh {
-  const box = new BoxGeometry(width, height, depth);
-  box.translate(0, height / 2, 0);
+function playVolume(width: number, height: number, depth: number, back: number): Mesh {
+  // `back` extends the volume behind the mat, over the world island.
+  const box = new BoxGeometry(width, height, depth + back);
+  box.translate(0, height / 2, -back / 2);
   const mesh = new Mesh(box, new ShaderMaterial({
     vertexShader: 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: 'void main() { gl_FragDepth = 1.0; }',
@@ -54,14 +55,14 @@ function playVolume(width: number, height: number, depth: number): Mesh {
   return mesh;
 }
 
-export function installRealDepth(world: World, area: Object3D, width: number, height: number, depth: number) {
+export function installRealDepth(world: World, area: Object3D, width: number, height: number, depth: number, back = 0) {
   const xr = world.renderer.xr;
   const original = xr.getDepthSensingMesh.bind(xr);
   const near = new Vector2();
   const far = new Vector2();
   let patched: Mesh | null = null;
   let enabled = true;
-  const volume = playVolume(width, height, depth);
+  const volume = playVolume(width, height, depth, back);
   area.add(volume);
   const pass = () => {
     const mesh = enabled ? original() : null;

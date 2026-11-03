@@ -45,6 +45,8 @@ import { HandBodies } from './hand-bodies.js';
 import { Dimmer } from './dimmer.js';
 import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
+import { WorldIsland } from './world-island.js';
+import { ISLAND_PLACEMENT } from './island-terrain.js';
 import { ResultAction, ResultCard } from './result-card.js';
 import { Best, mergeBest, Result, totalStars, worldOpen } from './score.js';
 import { decodeFolds, encodeFolds, formatCode } from './share.js';
@@ -150,6 +152,8 @@ export class GameSystem extends createSystem({
   private resultCard!: ResultCard;
   private badge = new BadgePop();
   private levelSelect!: LevelSelect;
+  private island!: WorldIsland;
+  private islandUnlocked: number[] = [];
   /** The level the result card is about, for Retry. */
   private lastLevel: Level | null = null;
   private ear = new Vector3();
@@ -249,6 +253,10 @@ export class GameSystem extends createSystem({
         const sheet = this.openingShared ? null : this.progress.sheets?.find((slot) => slot.id === this.game.level.id);
         if (sheet) this.game.restoreSheet(sheet);
         this.saveSheet();
+        if (this.island) {
+          this.island.setCurrentWorld(this.game.level.world);
+          this.refreshIsland();
+        }
       },
       onChanged: () => this.saveSheet(),
       onSolved: (level, _paper, _root, result) => {
@@ -256,6 +264,11 @@ export class GameSystem extends createSystem({
         this.progress.sheets = this.progress.sheets?.filter((slot) => slot.id !== level.id);
         this.saveProgress();
         this.zoo.cheer();
+        if (level.world >= 0) {
+          // Preview the new terrace now; durable scoring still happens at reveal.
+          if (!this.progress.solved.includes(level.id)) this.refreshIsland([...this.progress.solved, level.id], true);
+          this.island.celebrate(level.world);
+        }
         this.celebrate = { t: 0, level, revealed: false, firstSolve: !this.progress.inspectSeen && !this.progress.solved.length && !(this.progress.daily?.length), vanished: false, where: '', sayAt: Infinity, nextAt: Infinity, result };
       },
       onDaily: () => this.toggleDaily(),
@@ -284,13 +297,7 @@ export class GameSystem extends createSystem({
       best: () => this.progress.best ?? {},
       streak: () => this.streak(),
       dailyDone: () => (this.progress.daily ?? []).includes(dayNumber()),
-      play: (i) => {
-        this.resultCard.hide();
-        this.progress.level = i;
-        this.saveProgress();
-        this.game.loadLevel(i);
-        this.game.hidePaper(false);
-      },
+      play: (i) => this.playCampaignLevel(i),
       daily: () => {
         this.resultCard.hide();
         if (!this.game.isDaily) this.toggleDaily();
@@ -311,6 +318,23 @@ export class GameSystem extends createSystem({
         this.game.hidePaper(false);
       },
     });
+    this.island = new WorldIsland({
+      play: (i) => this.playCampaignLevel(i),
+      canPlay: () => !this.game.busy && !this.game.inputLocked && !this.celebrate &&
+        !this.title.playing && !this.demo && !this.roomModel.showing && !this.menu.isOpen &&
+        !this.album.isOpen && !this.levelSelect.isOpen && !this.settingsPanel.isOpen && !this.resultCard.showing,
+    });
+    const islandEntity = this.world.createTransformEntity(this.island.root, this.game.boardEntity);
+    // Keep the 58 cm hologram over the mat's far edge, tilted toward the player.
+    this.island.root.position.set(0, ISLAND_PLACEMENT.height, -MAT_D / 2 - ISLAND_PLACEMENT.beyondMat);
+    this.island.root.rotation.x = ISLAND_PLACEMENT.tilt;
+    this.island.root.scale.setScalar(ISLAND_PLACEMENT.scale);
+    for (const hit of this.island.hits) {
+      const entity = this.world.createTransformEntity(hit, islandEntity);
+      entity.addComponent(RayInteractable);
+      entity.addComponent(PokeInteractable);
+    }
+    this.refreshIsland();
     this.settingsPanel = new SettingsPanel(this.world, this.settings, (state) => {
       this.applySettings(state);
       saveSettings(state);
@@ -327,7 +351,7 @@ export class GameSystem extends createSystem({
     this.menu.hands = this.hands;
     this.applySettings(this.settings);
     this.world.createTransformEntity(this.title.root);
-    const realDepth = installRealDepth(this.world, this.game.boardRoot, MAT_W + 0.04, 0.55, MAT_D + 0.04);
+    const realDepth = installRealDepth(this.world, this.game.boardRoot, MAT_W + 0.1, 0.75, MAT_D + 0.04, 0.85);
     this.game.boardRoot.add(this.title.paper);
     this.title.onGathered = () => {
       if (this.titleOnMat && !this.game.solved) this.game.hidePaper(false);
@@ -416,6 +440,7 @@ export class GameSystem extends createSystem({
             framebufferHeight: layer ? ('framebufferHeight' in layer ? layer.framebufferHeight : layer.textureHeight) : 0,
           };
         },
+        island: () => this.island,
         fov: () => viewFov(this.world),
         forceFov: (left = 37, right = 37, up = 25, down = 43) => viewFov(this.world).force({ left, right, up, down }),
         game: this.game,
@@ -1081,6 +1106,22 @@ export class GameSystem extends createSystem({
     this.title.play(this.game.level.look.front);
   }
 
+  /** Shared LevelSelect/island entry: persist the choice, then open its paper. */
+  private playCampaignLevel(index: number) {
+    this.resultCard.hide();
+    this.progress.level = index;
+    this.saveProgress();
+    this.game.loadLevel(index);
+    this.game.hidePaper(false);
+  }
+
+  private refreshIsland(solved: readonly string[] = this.progress.solved, animate = false) {
+    this.islandUnlocked.length = 0;
+    const stars = totalStars(this.progress.best ?? {});
+    for (let i = 0; i < WORLDS.length; i++) if (worldOpen(i, stars)) this.islandUnlocked.push(i);
+    this.island.setProgress(solved, this.islandUnlocked, animate);
+  }
+
   private saveProgress() {
     safeSet(PROGRESS_KEY, JSON.stringify(this.progress));
   }
@@ -1134,6 +1175,7 @@ export class GameSystem extends createSystem({
           if (!worldOpen(k, before) && worldOpen(k, after)) lines.push(`${WORLDS[k].name} world unlocked`);
         }
         c.banner = lines.join('   ·   ');
+        this.refreshIsland();
       }
       if (c.level.world >= 0 || this.game.isDaily) {
         this.checkBadges();
@@ -1325,6 +1367,9 @@ export class GameSystem extends createSystem({
     this.badge.update(delta);
     this.levelSelect.update(delta, this.handBodies.pinch);
     this.settingsPanel.update(delta);
+    this.island.setVisible(!this.title.playing && !this.demo && !this.album.isOpen &&
+      !this.levelSelect.isOpen && !this.roomModel.showing && !this.menu.isOpen && !this.settingsPanel.isOpen && !this.resultCard.showing);
+    this.island.update(delta, this.handBodies.pinch);
     this.game.board.setCardAway(
       this.title.playing || !!this.celebrate || !!this.demo || this.roomModel.showing || this.menu.isOpen || this.album.isOpen || this.levelSelect.isOpen || this.settingsPanel.isOpen || this.resultCard.showing,
       delta,
