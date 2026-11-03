@@ -13,7 +13,11 @@ fontsReady()
   )
   .then((world) => {
     world.registerSystem(GameSystem);
-    void setupLanding(world);
+    const game = world.getSystem(GameSystem)!;
+    void setupLanding(world, {
+      startDesktop: () => game.enableDesktopCamera(),
+      toggleSound: () => game.toggleSound(),
+    });
 
     // Installed as an app on Quest there is no page to click: the launch tap
     // is the user activation, so go straight into the room. In a browser tab

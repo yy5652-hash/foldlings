@@ -174,6 +174,11 @@ export class FoldGame {
   private hinted = false;
 
   private drag: Drag | null = null;
+
+  /** True while a hand, ray or mouse is holding the paper. */
+  get dragging(): boolean {
+    return this.drag !== null;
+  }
   handBodies?: HandBodies;
   private grips = { left: new Grip(), right: new Grip() };
   private sourceGap = 0;

@@ -41,6 +41,7 @@
         box-sizing: border-box;
       }
       #landing.hidden,
+      #landing[hidden],
       #landing [hidden] {
         display: none;
       }
@@ -289,11 +290,76 @@
         border: 1px solid rgba(120, 225, 255, 0.32);
         box-shadow: 0 0 60px rgba(40, 150, 220, 0.18);
       }
+      /* Desktop game controls share the projection palette and typefaces. */
+      .desktop-game #scene-container canvas { touch-action: none; }
+      #game-hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; color: #bdf2ff; }
+      #game-hud[hidden], #game-hud [hidden], #about-close[hidden] { display: none; }
+      #game-hud, #game-hud * { box-sizing: border-box; }
+      .hud-wordmark {
+        position: absolute; top: max(20px, env(safe-area-inset-top)); left: max(20px, env(safe-area-inset-left));
+        font: 14px 'Michroma', sans-serif; letter-spacing: 0.18em;
+        text-shadow: 0 0 22px rgba(70, 190, 255, 0.65);
+      }
+      .hud-glass {
+        background: rgba(3, 14, 23, 0.88); border: 1px solid rgba(120, 225, 255, 0.32);
+        border-radius: 10px; box-shadow: 0 0 30px rgba(40, 150, 220, 0.12);
+        -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+      }
+      .hud-bar {
+        position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+        width: max-content; max-width: calc(100% - 24px); padding: 6px 10px;
+        display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 8px;
+        pointer-events: auto;
+      }
+      #game-hud button, #about-close {
+        min-height: 44px; padding: 8px 10px; border: 1px solid transparent; border-radius: 5px;
+        background: transparent; color: #bdf2ff; cursor: pointer;
+        font: 12px 'JetBrains Mono Variable', ui-monospace, monospace;
+      }
+      #game-hud button:hover, #about-close:hover { background: rgba(120, 225, 255, 0.12); }
+      #game-hud button:disabled { opacity: 0.4; cursor: default; }
+      #game-hud button:focus-visible, #about-close:focus-visible { outline: 2px solid #8fe6ff; outline-offset: 2px; }
+      #hud-quest-hint { order: 1; flex-basis: 100%; text-align: center; color: rgba(255, 255, 255, 0.62); font-size: 11px; line-height: 1.5; }
+      #hud-help {
+        position: absolute; bottom: max(154px, calc(env(safe-area-inset-bottom) + 142px)); left: 50%; transform: translateX(-50%);
+        width: min(360px, calc(100% - 24px)); padding: 16px 20px; pointer-events: auto;
+        max-height: calc(100dvh - 220px); overflow-y: auto;
+      }
+      #hud-help h2 { margin: 0 0 12px; font: 14px 'Michroma', sans-serif; }
+      #hud-help ol { padding-left: 22px; font-size: 14px; line-height: 1.9; }
+      #hud-help p { font-size: 12px; line-height: 1.6; color: rgba(255, 255, 255, 0.62); }
+      #hud-help-close { float: right; margin: -8px -10px 0 4px; }
+      #landing.about-overlay { inset: 12px; z-index: 3; border: 1px solid rgba(120, 225, 255, 0.32); border-radius: 12px; }
+      #about-close { position: sticky; top: 10px; float: right; margin: 10px; z-index: 4; background: #071b29; }
+      @media (max-width: 480px) {
+        .hud-bar { width: calc(100% - 24px); gap: 0 2px; padding: 4px 6px; }
+        #game-hud button { font-size: 11px; padding: 7px 9px; }
+        #hud-quest-hint { font-size: 10px; padding: 3px 0; }
+        .hud-wordmark { font-size: 12px; }
+      }
 </style>
   </head>
   <body>
     <div id="scene-container"></div>
-    <div id="landing">
+    <div id="game-hud" hidden>
+      <div class="hud-wordmark">FOLDLINGS</div>
+      <nav class="hud-bar hud-glass" aria-label="Game controls">
+        <button id="hud-vr" disabled>Enter VR</button>
+        <button id="hud-ar" disabled>Play in your room</button>
+        <span id="hud-quest-hint">Open on Meta Quest to fold with your hands</span>
+        <button id="hud-how" aria-expanded="false" aria-controls="hud-help">How to play</button>
+        <button id="hud-about" aria-controls="landing">About</button>
+        <button id="hud-sound" aria-pressed="true">Sound on</button>
+      </nav>
+      <section id="hud-help" class="hud-glass" aria-labelledby="hud-help-title" hidden>
+        <button id="hud-help-close" aria-label="Close how to play">Close</button>
+        <h2 id="hud-help-title">How to play</h2>
+        <ol><li>Drag a corner over</li><li>Match the goal</li><li>Solve to wake a creature</li></ol>
+        <p>Drag empty space or right-drag to orbit. Scroll to zoom.<br />Touch: drag paper to fold; use two fingers to orbit or pinch to zoom.</p>
+      </section>
+    </div>
+    <div id="landing" hidden>
+      <button id="about-close" aria-label="Close About and return to game" hidden>Back to game · Close</button>
       <section class="hero" id="landing-top" aria-labelledby="hero-title">
         <div class="hero-content">
           <p class="eyebrow">Foldlings</p>

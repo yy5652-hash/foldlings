@@ -50,6 +50,7 @@ import { Hands } from './hands.js';
 import { LevelSelect } from './level-select.js';
 import { WorldIsland } from './world-island.js';
 import { ISLAND_PLACEMENT } from './island-terrain.js';
+import { DesktopCamera } from '../ui/desktop-camera.js';
 import { ResultAction, ResultCard } from './result-card.js';
 import { Best, mergeBest, Result, totalStars, worldOpen } from './score.js';
 import { decodeFolds, encodeFolds, formatCode } from './share.js';
@@ -201,6 +202,7 @@ export class GameSystem extends createSystem({
   private deliveryX = -0.29;
   private deliveryReady = false;
   private landing: HTMLElement | null = null;
+  private desktopCamera?: DesktopCamera;
   private quality = new QualityGuard();
   private handBodies!: HandBodies;
   /** Film capture: the emulator has no real hands to see through passthrough. */
@@ -1076,10 +1078,18 @@ export class GameSystem extends createSystem({
     return ACHIEVEMENTS.map((a) => ({ title: a.title, how: a.how, earned: got.includes(a.id) }));
   }
 
-  private toggleSound() {
+  enableDesktopCamera() {
+    if (this.desktopCamera) return;
+    this.desktopCamera = new DesktopCamera(this.world, this.game.boardRoot,
+      () => this.landing?.classList.contains('hidden') ?? false, () => this.game.dragging);
+    this.cleanupFuncs.push(() => this.desktopCamera?.dispose());
+  }
+
+  toggleSound() {
     setMuted(!isMuted());
     this.progress.muted = isMuted();
     this.saveProgress();
+    window.dispatchEvent(new Event('foldlings-soundchange'));
   }
 
   private applySettings(state: SettingsState) {
@@ -1387,6 +1397,7 @@ export class GameSystem extends createSystem({
     this.updateFlash(this.skipFlashDelta ? 0 : delta);
     this.skipFlashDelta = false;
     delta = Math.min(delta, 0.1);
+    this.desktopCamera?.update(delta);
     const frame = this.world.session ? this.world.renderer.xr.getFrame() : null;
     this.room.update(frame, delta);
     if (this.sessionTime >= 0) {
