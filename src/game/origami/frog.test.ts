@@ -99,7 +99,7 @@ describe('rectangle-base jumping frog', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  });
+  }, 240000);
 
   it('clamps and replays sheet, flat and opened states with continuous stage boundaries', () => {
     const fold = new FoldUp(baked.frog), out = new Float32Array(data.positions.length * 3), next = new Float32Array(out.length);

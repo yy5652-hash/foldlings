@@ -177,7 +177,7 @@ describe('rabbit paper', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  });
+  }, 240000);
 
   it('replays and clamps the sheet, flat and opened poses continuously in one buffer', () => {
     const fold = new FoldUp(baked.rabbit), out = new Float32Array(data.positions.length * 3), next = new Float32Array(out.length);

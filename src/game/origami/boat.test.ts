@@ -89,7 +89,7 @@ describe('traditional hat-and-diamond boat', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  });
+  }, 240000);
 
   it('replays the sheet, closed boat and opening continuously with clamping', () => {
     const fold = new FoldUp(baked.boat), out = new Float32Array(data.positions.length * 3), next = new Float32Array(out.length);

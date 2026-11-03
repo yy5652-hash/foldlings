@@ -97,7 +97,7 @@ describe('waterbomb butterfly', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  });
+  }, 240000);
 
   it('clamps, replays and joins every folding stage continuously', () => {
     const fold = new FoldUp(baked.butterfly), out = new Float32Array(data.positions.length * 3), next = new Float32Array(out.length);

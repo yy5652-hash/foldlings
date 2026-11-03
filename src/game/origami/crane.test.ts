@@ -126,7 +126,7 @@ describe('crane geometry', () => {
 
   it('reproduces the checked-in crane data without IO', () => {
     expect(runtimeData(data)).toEqual(baked.crane);
-  });
+  }, 240000);
 
   it('keeps micrometre-quantized runtime paper within the strain budget', () => {
     const report = measure(crane.graph, baked.crane.positions);

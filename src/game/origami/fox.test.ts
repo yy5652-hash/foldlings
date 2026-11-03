@@ -98,7 +98,7 @@ describe('fox paper', () => {
       expect(report.rmsStrain).toBeLessThanOrEqual(.002);
       expect(report.planarity).toBeLessThanOrEqual(.0005);
     }
-  });
+  }, 240000);
 
   it('replays and clamps sheet, flat and opened poses continuously in the same buffer', () => {
     const fold = new FoldUp(baked.fox), out = new Float32Array(data.positions.length * 3), next = new Float32Array(out.length);

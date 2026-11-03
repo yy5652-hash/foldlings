@@ -37,3 +37,7 @@ These checks do not certify collision-free folding or physical layer order; laye
 Bake: `node scripts/bake-origami.ts`; preview: `node scripts/origami-preview.mjs` (offline SVGs, no browser).
 Outputs: generated `baked.ts`, `.tmp/origami-preview/baked.json`, and `<kind>.svg` previews.
 Verify: `npx tsc --noEmit -p .` then `npx vitest run`. Never hand-edit `baked.ts`.
+
+A model with `touchesGround` is not left in the pose `shape` gives it: `settle` tips it onto whatever its centre of mass rests on, and everything downstream uses that pose. Shape tests can read the designed pose with `bake(definition, { rest: false })`.
+
+Rig parts move only about the crease they share with the rest of the sheet (`Flex` in `creature-models.ts`), and stop before a seam opens past `MAX_SEAM`. Prefer a straight seam for anything that has to move a lot: a crooked one allows very little.
