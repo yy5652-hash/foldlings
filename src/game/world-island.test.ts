@@ -1,11 +1,11 @@
 /** Headless model/input checks. These do not claim device or WebGL verification. */
-import { Group, Mesh, PerspectiveCamera, Vector3, type BufferAttribute } from '@iwsdk/core';
+import { Color, Group, Mesh, PerspectiveCamera, Vector3, type BufferAttribute } from '@iwsdk/core';
 import { describe, expect, it, vi } from 'vitest';
 import { LEVELS, PER_WORLD, WORLDS } from './levels.js';
 import { WorldIsland } from './world-island.js';
 import { sfx } from './sfx.js';
 import { projectionAngles } from './fov.js';
-import { ISLAND_PLACEMENT, REGION_RADIUS, REGION_TOP, surfaceHeight } from './island-terrain.js';
+import { BIOME_COLORS, ISLAND_PLACEMENT, REGION_RADIUS, REGION_TOP, surfaceHeight } from './island-terrain.js';
 
 vi.mock('./glass.js', async () => {
   const { Mesh, PlaneGeometry, MeshBasicMaterial } = await import('@iwsdk/core');
@@ -120,7 +120,7 @@ describe('world island without a renderer', () => {
     island.setProgress([LEVELS[0].id, LEVELS[2].id], [0,1]);
     event(island.hits[0], 'pointerenter');
     island.update(.4, hands);
-    expect(island.root.children.filter(o => o.name === '' && o.visible)).toHaveLength(1);
+    expect(island.root.getObjectByName('Island_hover_label')!.visible).toBe(true);
     event(island.hits[0], 'pointerdown');
     expect(play).toHaveBeenCalledWith(1);
     island.update(.4, hands);
@@ -213,35 +213,72 @@ describe('world island without a renderer', () => {
     expect(island.hits[3].position.y).toBeCloseTo(.025);
   });
 
-  it('lazily bakes only solved creatures into single draws sharing a lit material; idle changes only yaw', () => {
+  it('merges solved miniatures into one static draw and only rebuilds on a changed set of lit worlds', () => {
     const { island, hands } = fixture();
-    const creatures = () => island.root.children.filter(o => o.name.startsWith('Island_creature_'));
-    expect(creatures()).toHaveLength(0);
+    const batch = island.root.getObjectByName('Island_creature_batch') as Mesh;
+    expect(batch.visible).toBe(false);
     const solved = [LEVELS[0].id, LEVELS[2*PER_WORLD].id, LEVELS[7*PER_WORLD].id];
     island.setProgress(solved, [0,1,2,7]);
-    const models = creatures();
-    expect(models).toHaveLength(3);
-    const meshes = models.map(o => o.children[0] as Mesh);
-    const geometry = meshes.map(o => o.geometry);
-    expect(new Set(meshes.map(o => o.material)).size).toBe(1);
-    for (const mesh of meshes) {
-      expect(mesh.geometry.groups).toHaveLength(0);
-      expect(mesh.geometry.getAttribute('position').count).toBeGreaterThan(0);
-      expect((mesh.material as import('@iwsdk/core').ShaderMaterial).uniforms.uGlow.value).toBeGreaterThan(1);
-    }
+    expect(batch.visible).toBe(true);
+    const geometry = batch.geometry;
+    expect(geometry.groups).toHaveLength(0);
+    expect(new Set(geometry.getAttribute('aWorld').array)).toEqual(new Set([0,2,7]));
+    expect(geometry.getAttribute('position').count).toBeGreaterThan(0);
+    const dispose = vi.spyOn(geometry, 'dispose');
     for (let i = 0; i < 30; i++) island.update(.1, hands);
-    island.setProgress(solved, [0,1,2,7]);
-    expect(creatures()).toEqual(models);
-    for (let i = 0; i < models.length; i++) {
-      expect(models[i].scale.toArray()).toEqual([.35,.35,.35]);
-      expect(models[i].rotation.x).toBe(0);
-      expect(models[i].rotation.z).toBe(0);
-      expect(models[i].rotation.y).not.toBe(0);
-      expect(meshes[i].geometry).toBe(geometry[i]);
-      expect((meshes[i].geometry.getAttribute('position') as BufferAttribute).version).toBe(0);
-    }
+    island.setProgress([...solved, LEVELS[1].id], [0,1,2,7]);
+    expect(batch.geometry).toBe(geometry);
+    expect(batch.rotation.toArray()).toEqual([0,0,0,'XYZ']);
+    expect((geometry.getAttribute('position') as BufferAttribute).version).toBe(0);
+    expect(dispose).not.toHaveBeenCalled();
     island.setProgress([], [0,1]);
-    expect(models.every(o => !o.visible)).toBe(true);
+    expect(batch.visible).toBe(false);
+    expect(batch.geometry.getAttribute('position').count).toBe(0);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps biome colours on all wire edges, including locked perimeter dashes', () => {
+    const { island } = fixture();
+    const wire = island.root.getObjectByName('Island_wire_and_lock_outlines') as Mesh;
+    const g = wire.geometry, colors = g.getAttribute('color'), worlds = g.getAttribute('aWorld');
+    expect(colors.count).toBe(worlds.count);
+    const seen = new Set<number>();
+    for (let i = 0; i < colors.count; i++) {
+      const world = worlds.getX(i), tint = new Color(BIOME_COLORS[world]);
+      expect(colors.getX(i)).toBeCloseTo(tint.r, 6);
+      expect(colors.getY(i)).toBeCloseTo(tint.g, 6);
+      expect(colors.getZ(i)).toBeCloseTo(tint.b, 6);
+      if (g.getAttribute('aOutline').getX(i) === 1) seen.add(world);
+    }
+    expect(seen.size).toBe(8);
+    expect(new Set(g.getAttribute('aGap').array)).toEqual(new Set([0,1]));
+  });
+
+  it('pulses START on the initial/current unsolved world and hides it after its first solve', () => {
+    const { island, hands } = fixture();
+    const column = island.root.getObjectByName('Island_START_column') as Mesh;
+    const label = island.root.getObjectByName('Island_START_label')!;
+    const material = column.material as import('@iwsdk/core').MeshBasicMaterial;
+    expect(column.visible && label.visible).toBe(true);
+    expect(material.color.getHex()).toBe(BIOME_COLORS[0]);
+    island.update(.1, hands);
+    const opacity = material.opacity;
+    island.update(.2, hands);
+    expect(material.opacity).not.toBe(opacity);
+    island.setProgress([], [0,1,3]);
+    island.setCurrentWorld(3);
+    expect(material.color.getHex()).toBe(BIOME_COLORS[3]);
+    expect(column.position.x).toBeCloseTo(Math.cos(3.5*Math.PI/4)*REGION_RADIUS);
+    island.update(.1, hands, true);
+    expect(material.opacity).toBe(.65);
+    island.update(.2, hands, true);
+    expect(material.opacity).toBe(.65);
+    island.setProgress([LEVELS[0].id], [0,1,3]);
+    expect(column.visible).toBe(true);
+    island.setProgress([LEVELS[0].id, LEVELS[3*PER_WORLD].id], [0,1,3]);
+    expect(column.visible || label.visible).toBe(false);
+    island.setCurrentWorld(7); // locked worlds never advertise START
+    expect(column.visible).toBe(false);
   });
 
   it('keeps the projector source on the mat below the island and drifts 320 points entirely in the shader', () => {
@@ -320,22 +357,39 @@ describe('world island without a renderer', () => {
     expect(buffer.drawRange.count).toBe(0);
   });
 
-  it('stays within 24 draws with all eight creatures, hover, pulse and solve wave', () => {
+  it('keeps meshes, lines and points <=16, including hidden feedback and all creature models', () => {
     const { island, hands } = fixture();
     island.setCurrentWorld(0);
-    island.celebrate(0);
-    event(island.hits[0], 'pointerenter');
-    island.update(.1, hands);
-    island.setProgress(LEVELS.map(l => l.id), WORLDS.map((_, i) => i));
-    let calls = 0;
-    island.root.traverseVisible(o => {
-      const renderable = o as Mesh;
-      if (!renderable.material) return;
-      const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
-      for (const m of materials) if (m.visible) calls += m.transparent && m.side === 2 && !m.forceSinglePass ? 2 : 1;
-    });
-    expect(calls).toBe(17);
-    expect(calls).toBeLessThanOrEqual(24);
-    console.info(`Island maximum structural draw estimate: ${calls}`);
+    let maximum = 0;
+    // Empty, seven lit + START, and all eight lit; include hub/region hover and solve wave.
+    for (const solved of [[], LEVELS.filter(l => l.world !== 0).map(l => l.id), LEVELS.map(l => l.id)]) {
+      island.setProgress(solved, WORLDS.map((_, i) => i));
+      island.celebrate(0);
+      event(island.hits[1], 'pointerenter');
+      event(island.hub, 'pointerenter');
+      island.update(.1, hands);
+      let objects = 0, draws = 0;
+      // Count even object.visible=false. Only non-rendering hit materials are excluded.
+      island.root.traverse(o => {
+        const renderable = o as Mesh & { isLine?: boolean; isPoints?: boolean };
+        if (!renderable.isMesh && !renderable.isLine && !renderable.isPoints) return;
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        if (materials.some(m => m.visible)) objects++;
+      });
+      island.root.traverseVisible(o => {
+        const renderable = o as Mesh;
+        if (!renderable.material) return;
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        for (const m of materials) if (m.visible) draws += m.transparent && m.side === 2 && !m.forceSinglePass ? 2 : 1;
+      });
+      expect(objects).toBe(13);
+      expect(objects).toBeLessThanOrEqual(16);
+      expect(draws).toBeLessThanOrEqual(16);
+      maximum = Math.max(maximum, draws);
+      event(island.hits[1], 'pointerleave');
+      event(island.hub, 'pointerleave');
+    }
+    expect(maximum).toBe(13);
+    console.info(`Island draw objects: 25 -> 13 (includes hidden feedback); maximum active estimate: ${maximum}`);
   });
 });

@@ -6,7 +6,7 @@ import {
 import { buildRig } from './creature-models.js';
 import { holoCloud, holoLine, holoWall } from './holo.js';
 import { WORLDS } from './levels.js';
-import { ISLAND_PLACEMENT, ISLAND_RADIUS } from './island-terrain.js';
+import { ISLAND_PLACEMENT, ISLAND_RADIUS, ISLAND_SECTOR, REGION_RADIUS, REGION_TOP } from './island-terrain.js';
 
 export function foundation(): Group {
   const out = new Group();
@@ -79,7 +79,7 @@ export function driftingCloud(): Points {
   return cloud;
 }
 
-/** Bake the fully folded buildRig into one draw; idle needs only the root yaw. */
+/** Bake the fully folded buildRig into one draw; no rig or animation survives the bake. */
 export function creatureHologram(world: number, material: ShaderMaterial): Group {
   const rig = buildRig(WORLDS[world].kind, '#7deaff', '#b3a0ff');
   rig.root.updateMatrixWorld(true);
@@ -119,4 +119,39 @@ export function creatureHologram(world: number, material: ShaderMaterial): Group
   rig.root.name = `Island_creature_${WORLDS[world].kind}`;
   rig.root.scale.setScalar(.35);
   return rig.root;
+}
+
+/** Merge solved miniatures sharing one material; called only on progress changes.
+ * Positions are island-local, while aWorld retains GPU lift/shake per region.
+ */
+export function creatureBatch(worlds: readonly number[], material: ShaderMaterial): BufferGeometry {
+  const positions: number[] = [], colors: number[] = [], ids: number[] = [];
+  const v = new Vector3();
+  for (const world of worlds) {
+    const root = creatureHologram(world, material);
+    const a = (world + .5) * ISLAND_SECTOR;
+    root.position.set(Math.cos(a) * REGION_RADIUS, REGION_TOP, Math.sin(a) * REGION_RADIUS);
+    root.updateMatrixWorld(true);
+    const mesh = root.children[0] as Mesh;
+    const p = mesh.geometry.getAttribute('position'), c = mesh.geometry.getAttribute('color');
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(mesh.matrixWorld);
+      positions.push(v.x, v.y, v.z);
+      colors.push(c.getX(i), c.getY(i), c.getZ(i));
+      ids.push(world);
+    }
+    mesh.geometry.dispose();
+    root.clear();
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('aWorld', new Float32BufferAttribute(ids, 1));
+  geometry.setAttribute('aLayer', new Float32BufferAttribute(new Float32Array(ids.length), 1));
+  geometry.computeVertexNormals();
+  if (positions.length) {
+    geometry.computeBoundingSphere();
+    geometry.boundingSphere!.radius += .03;
+  }
+  return geometry;
 }

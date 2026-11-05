@@ -12,7 +12,7 @@ export const REGION_TOP = .07;
 export const ISLAND_PLACEMENT = { height: .32, beyondMat: -.14, tilt: 25 * Math.PI / 180, scale: .72 } as const;
 export type P = [number, number, number];
 type Footprint = [number, number][];
-const PALETTE = [0xffb65b, 0x55e8a1, 0x4acdf5, 0x9189ff, 0x47cbaa, 0xff83cf, 0xbedb76, 0x4088e8];
+export const BIOME_COLORS = [0xffb65b, 0x55e8a1, 0x4acdf5, 0x9189ff, 0x47cbaa, 0xff83cf, 0xbedb76, 0x4088e8];
 export const polar = (r: number, a: number, y: number): P => [r * Math.cos(a), y, r * Math.sin(a)];
 
 /** Single non-indexed batch, with region/level IDs retained for GPU feedback. */
@@ -21,7 +21,7 @@ export class Facets {
   terraces: number[] = [];
   worlds: number[] = [];
   colors: number[] = [];
-  triangle(a: P, b: P, c: P, terrace: number, world: number, color = PALETTE[world], shade = 1) {
+  triangle(a: P, b: P, c: P, terrace: number, world: number, color = BIOME_COLORS[world], shade = 1) {
     const tint = new Color(color);
     // Ten campaign steps reveal a mosaic of facets across the four physical tiers.
     terrace = terrace < 0 ? terrace : this.positions.length / 9 % 10;
@@ -103,7 +103,7 @@ export function terrain(w: number): Facets {
     const s = a0 + (a1-a0)*j/5, t = a0 + (a1-a0)*(j+1)/5;
     const p = polar(ISLAND_RADIUS, s, 0), q = polar(ISLAND_RADIUS, t, 0);
     const r = polar(ISLAND_INNER, t, 0), k = polar(ISLAND_INNER, s, 0);
-    prism(f, w, [[p[0],p[2]],[q[0],q[2]],[r[0],r[2]],[k[0],k[2]]], -.014, .012, 0x286b96);
+    prism(f, w, [[p[0],p[2]],[q[0],q[2]],[r[0],r[2]],[k[0],k[2]]], -.014, .012);
   }
   switch (WORLDS[w].kind) {
     case 'crane': // A square pagoda staircase with a reflecting pond beside it.

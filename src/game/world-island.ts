@@ -1,9 +1,9 @@
-/** Eight volumetric holographic biomes; only uniforms/transforms change per frame.
+/** Eight tinted holographic biomes; only uniforms/transforms change per frame.
  * Metres, +Y up; parentless until GameSystem places it above the mat.
  */
 import {
   BufferGeometry, DoubleSide, EdgesGeometry,
-  CircleGeometry, RingGeometry, Float32BufferAttribute, Group, LineLoop, LineSegments, Mesh, MeshBasicMaterial, Vector3,
+  CircleGeometry, Color, CylinderGeometry, RingGeometry, Float32BufferAttribute, Group, LineLoop, LineSegments, Mesh, MeshBasicMaterial, Vector3,
 } from '@iwsdk/core';
 import { TextLabel } from './glass.js';
 import { holoBody, holoLine } from './holo.js';
@@ -11,9 +11,9 @@ import { islandProgress, type IslandProgress } from './island-progress.js';
 import { PER_WORLD, WORLDS } from './levels.js';
 import type { HandBodies } from './hand-bodies.js';
 import { sfx } from './sfx.js';
-import { creatureHologram, driftingCloud, foundation } from './island-holograms.js';
+import { creatureBatch, driftingCloud, foundation } from './island-holograms.js';
 import {
-  Facets, ISLAND_RADIUS as RADIUS, ISLAND_INNER as INNER,
+  BIOME_COLORS, Facets, ISLAND_RADIUS as RADIUS, ISLAND_INNER as INNER,
   ISLAND_SECTOR as SECTOR, ISLAND_GAP as GAP, REGION_RADIUS, REGION_TOP,
   polar, surfaceHeight, terrain, type P,
 } from './island-terrain.js';
@@ -40,10 +40,17 @@ export class WorldIsland {
   private waveStrength = 1;
 
   readonly progress: IslandProgress[] = [];
+  // Pre-render textures on progress changes, then swap references without canvas work in update().
   private labels: TextLabel[] = [];
+  private hoverLabel = new Mesh();
+  private startLabel = new TextLabel(.018);
+  private beacon = new Mesh(new CylinderGeometry(.0015, .0025, .07, 6), new MeshBasicMaterial({
+    color: BIOME_COLORS[0], transparent: true, opacity: .65, toneMapped: false, depthWrite: false,
+  }));
   private body = holoBody();
   private creatureBody = holoBody();
-  private creatures: (Group | null)[] = new Array(WORLDS.length).fill(null);
+  private creatures = new Mesh(new BufferGeometry(), this.creatureBody);
+  private creatureMask = 0;
   private lift = new Float32Array(8);
   private focus = new Float32Array(8);
   private lines = holoLine(0x9befff);
@@ -72,6 +79,7 @@ export class WorldIsland {
     this.hub.position.y = -.012;
     this.flashRing.material.forceSinglePass = true;
     this.hubLabel.mesh.name = 'Flash_hub_label';
+    if (!Array.isArray(this.hubLabel.mesh.material)) this.hubLabel.mesh.material.forceSinglePass = true;
     this.hubLabel.set('FLASH FOLD');
     this.hubLabel.mesh.position.set(0, .045, 0);
     this.hubLabel.mesh.rotation.x = -Math.PI / 2;
@@ -87,6 +95,8 @@ export class WorldIsland {
     hubEvents.addEventListener('pointerdown', () => this.select(8));
 
     const all = new Facets();
+    const edgeColors: number[] = [];
+    const tint = new Color();
     const edges: number[] = [], worlds: number[] = [], outlines: number[] = [], gaps: number[] = [];
     const hitMaterial = new MeshBasicMaterial({ visible: false, side: DoubleSide });
     for (let w = 0; w < WORLDS.length; w++) {
@@ -122,7 +132,8 @@ export class WorldIsland {
       label.mesh.raycast = noHit;
       label.mesh.visible = false;
       this.labels.push(label);
-      this.root.add(label.mesh);
+      tint.set(BIOME_COLORS[w]);
+      while (edgeColors.length < edges.length) edgeColors.push(tint.r, tint.g, tint.b);
       const events = hit as unknown as { addEventListener(type: string, cb: () => void): void };
       events.addEventListener('pointerenter', () => { this.rayHovers[w]++; });
       events.addEventListener('pointerleave', () => { this.rayHovers[w] = Math.max(0, this.rayHovers[w]-1); });
@@ -135,6 +146,7 @@ export class WorldIsland {
     this.root.add(body);
     const wire = new BufferGeometry();
     wire.setAttribute('position', new Float32BufferAttribute(edges, 3));
+    wire.setAttribute('color', new Float32BufferAttribute(edgeColors, 3));
     wire.setAttribute('aWorld', new Float32BufferAttribute(worlds, 1));
     wire.setAttribute('aOutline', new Float32BufferAttribute(outlines, 1));
     wire.setAttribute('aGap', new Float32BufferAttribute(gaps, 1));
@@ -144,6 +156,28 @@ export class WorldIsland {
     mesh.raycast = noHit;
     this.root.add(mesh);
     this.root.add(foundation(), driftingCloud());
+    this.hoverLabel.geometry.dispose();
+    (this.hoverLabel.material as MeshBasicMaterial).dispose();
+    this.hoverLabel.geometry = this.labels[0].mesh.geometry;
+    this.hoverLabel.material = this.labels[0].mesh.material;
+    this.hoverLabel.name = 'Island_hover_label';
+    this.hoverLabel.raycast = noHit;
+    this.hoverLabel.visible = false;
+    this.beacon.name = 'Island_START_column';
+    this.startLabel.mesh.name = 'Island_START_label';
+    this.startLabel.set('START');
+    this.startLabel.mesh.rotation.x = -Math.PI / 2;
+    this.startLabel.mesh.raycast = this.beacon.raycast = noHit;
+    if (!Array.isArray(this.startLabel.mesh.material)) this.startLabel.mesh.material.forceSinglePass = true;
+    this.creatures.name = 'Island_creature_batch';
+    this.creatures.raycast = noHit;
+    this.creatures.visible = false;
+    this.root.add(this.hoverLabel, this.beacon, this.startLabel.mesh, this.creatures);
+    this.creatureBody.uniforms.uLift = { value: this.lift };
+    this.creatureBody.uniforms.uShake = { value: this.shake };
+    this.creatureBody.vertexShader = `attribute float aWorld; uniform float uLift[8]; uniform float uShake[8];
+${this.creatureBody.vertexShader}`
+      .replace('vec4 w = modelMatrix', 'p.x += uShake[int(aWorld)]; p.y += uLift[int(aWorld)]; vec4 w = modelMatrix');
     this.creatureBody.forceSinglePass = true;
     this.creatureBody.uniforms.uThick.value = 0;
     this.creatureBody.uniforms.uGlow.value = 1.8;
@@ -186,19 +220,22 @@ export class WorldIsland {
       varying float vIslandWorld; varying float vTerrace;\n${m.fragmentShader}`
       .replace('void main() {', `void main() {
         int wi = int(vIslandWorld + 0.5);
-        float awake = step(0.001, uFill[wi]);
         float islandFill = clamp(uFill[wi] - vTerrace, 0.0, 1.0);
         float islandGain = (1.0 + uFocus[wi] * 0.45 + uHover[wi] * 0.35);`)
       .replace('float body = 0.09', 'float body = 0.65')
       .replace('gl_FragColor = vec4(col, min(0.4, 0.12 + 0.3 * rim));', `
         // Faint surveyed land before solving; bright coloured solid facets after.
-        col = mix(vec3(0.18, 0.56, 0.75) * 0.12, col, awake);
-        col *= mix(0.9, 0.45 + 0.55 * islandFill, awake) * islandGain;
-        float alpha = mix(uOpen[wi] > 0.5 ? 0.055 : 0.03, 0.62, awake);
+        // Unsolved facets retain their own colour at 30% brightness (25% locked).
+        // The same alpha preserves that ratio with premultiplied additive light.
+        float base = uOpen[wi] > 0.5 ? 0.30 : 0.25;
+        col *= mix(base, 1.0, islandFill) * islandGain;
+        float alpha = 0.62;
         gl_FragColor = vec4(col * alpha, alpha);`);
   }
 
   private configureLines() {
+    this.lines.color.set(0xffffff);
+    this.lines.vertexColors = true;
     this.lines.onBeforeCompile = (shader) => {
       shader.uniforms.uOpen = { value: this.open };
       shader.uniforms.uFill = { value: this.fill };
@@ -212,14 +249,14 @@ export class WorldIsland {
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           int wi = int(aWorld + 0.5);
           transformed.x += uShake[wi]; transformed.y += uLift[wi];
-          vIslandLight = uFill[wi] > 0.001 ? 0.19 + uHover[wi] * 0.25
-            : (1.0 - aGap) * (0.13 + uOpen[wi] * 0.08 + uHover[wi] * 0.2);`);
+          float pattern = uOpen[wi] > 0.5 ? 1.0 : aOutline * (1.0 - aGap);
+          vIslandLight = pattern * (0.22 + uOpen[wi] * 0.13 + min(uFill[wi], 1.0) * 0.15 + uHover[wi] * 0.2);`);
       shader.fragmentShader = `varying float vIslandLight;\n${shader.fragmentShader}`
         .replace('vec4 diffuseColor = vec4( diffuse, opacity );', `
           if (vIslandLight < 0.001) discard;
           vec4 diffuseColor = vec4(diffuse * vIslandLight, opacity);`);
     };
-    this.lines.customProgramCacheKey = () => 'foldlings-island-lines-v2';
+    this.lines.customProgramCacheKey = () => 'foldlings-island-lines-v3';
   }
 
   setProgress(solved: readonly string[], unlockedWorlds: readonly number[], animate = false) {
@@ -230,14 +267,21 @@ export class WorldIsland {
       if (this.fillTime[i] === 1) this.fill[i] = state.solved;
       this.open[i] = state.unlocked ? 1 : 0;
       this.progress[i] = state;
-      if (state.solved > 0 && !this.creatures[i]) {
-        this.creatures[i] = creatureHologram(i, this.creatureBody);
-        this.root.add(this.creatures[i]!);
-        this.positionRegion(i);
-      }
-      if (this.creatures[i]) this.creatures[i]!.visible = state.solved > 0;
       this.labels[i].set(`${WORLDS[i].name.toUpperCase()}  ${state.solved}/${PER_WORLD}${state.unlocked ? '' : '  LOCKED'}`);
     }
+    let mask = 0;
+    const worlds: number[] = [];
+    for (let i = 0; i < WORLDS.length; i++) if (this.progress[i].solved > 0) {
+      mask |= 1 << i;
+      worlds.push(i);
+    }
+    if (mask !== this.creatureMask) {
+      this.creatures.geometry.dispose();
+      this.creatures.geometry = creatureBatch(worlds, this.creatureBody);
+      this.creatureMask = mask;
+    }
+    this.creatures.visible = mask !== 0;
+    this.updateBeacon(true);
   }
 
   setCurrentWorld(worldIndex: number) {
@@ -248,13 +292,25 @@ export class WorldIsland {
       this.lift[i] = this.focus[i] * .01 + (this.rayHovers[i] > 0 ? .015 : 0);
       this.positionRegion(i);
     }
+    this.updateBeacon(true);
+  }
+
+  private updateBeacon(reduceMotion: boolean) {
+    const i = this.current < 0 ? 0 : this.current;
+    const show = this.progress[i].unlocked && this.progress[i].solved === 0;
+    this.beacon.visible = this.startLabel.mesh.visible = show;
+    if (!show) return;
+    const a = (i + .5) * SECTOR;
+    const x = Math.cos(a) * REGION_RADIUS + this.shake[i], z = Math.sin(a) * REGION_RADIUS;
+    this.beacon.position.set(x, REGION_TOP + this.lift[i] + .035, z);
+    this.startLabel.mesh.position.set(x, REGION_TOP + this.lift[i] + .085, z);
+    this.beacon.material.color.set(BIOME_COLORS[i]);
+    this.beacon.material.opacity = reduceMotion ? .65 : .55 + .2 * Math.sin(this.clock * 2.8);
   }
 
   private positionRegion(i: number) {
     const a = (i + .5) * SECTOR, x = Math.cos(a) * REGION_RADIUS + this.shake[i], z = Math.sin(a) * REGION_RADIUS;
     this.hits[i].position.set(this.shake[i], this.root.visible ? this.lift[i] : -50, 0);
-    const creature = this.creatures[i];
-    if (creature) creature.position.set(x, REGION_TOP + this.lift[i], z);
     if (i === this.current) this.pulse.position.set(x, REGION_TOP + this.lift[i] + .001, z);
   }
 
@@ -272,7 +328,7 @@ export class WorldIsland {
     this.root.visible = visible;
     this.hub.position.y = visible ? -.012 : -50;
     this.hubHovers = 0;
-    this.hubLabel.mesh.visible = false;
+    this.hubLabel.mesh.visible = this.hoverLabel.visible = false;
     // Park hit surfaces too: pointer libraries can traverse invisible ancestors.
     for (let i = 0; i < this.hits.length; i++) {
       this.hits[i].position.y = visible ? this.lift[i] : -50;
@@ -342,10 +398,17 @@ export class WorldIsland {
       this.shake[i] = Math.sin(this.shakeTime[i]*85)*.004*(this.shakeTime[i]/.35);
       this.lift[i] = this.focus[i] * .01 + (hovered ? .015 : 0);
       this.positionRegion(i);
-      const creature = this.creatures[i];
-      if (creature) creature.rotation.y = .24 * Math.sin(this.clock * .42 + i);
     }
-    for (let i = 0; i < this.labels.length; i++) this.labels[i].mesh.visible = i === labelWorld;
+    this.hoverLabel.visible = this.root.visible && labelWorld >= 0;
+    if (labelWorld >= 0) {
+      const source = this.labels[labelWorld].mesh;
+      this.hoverLabel.geometry = source.geometry;
+      this.hoverLabel.material = source.material;
+      this.hoverLabel.position.copy(source.position);
+      this.hoverLabel.rotation.copy(source.rotation);
+      this.hoverLabel.scale.copy(source.scale);
+    }
+    this.updateBeacon(reduceMotion);
     this.pulse.scale.setScalar(.024*(1+.1*Math.sin(this.clock*2)));
     this.pulse.material.opacity = .45+.3*Math.sin(this.clock*2);
     this.hubLabel.mesh.visible = this.flashSeconds === null && (this.hubHovers > 0 || nearLeft === 8 || nearRight === 8);
