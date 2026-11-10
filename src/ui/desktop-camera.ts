@@ -249,6 +249,7 @@ export class DesktopCamera {
     const horizontal = Math.cos(pose.pitch) * pose.distance;
     this.eye.set(Math.sin(pose.yaw) * horizontal, Math.sin(pose.pitch) * pose.distance, Math.cos(pose.yaw) * horizontal);
     this.eye.add(this.target);
+    if (!Number.isFinite(this.eye.x + this.eye.y + this.eye.z + this.target.x + this.target.y + this.target.z)) return;
     const camera = this.world.camera;
     if (camera.parent) camera.parent.worldToLocal(this.eye);
     camera.position.copy(this.eye);

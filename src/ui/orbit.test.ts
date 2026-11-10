@@ -70,4 +70,24 @@ describe('desktop camera limits and timing', () => {
     expect(new Orbit(true, 375 / 812).distance).toBeGreaterThan(new Orbit(true, 16 / 9).distance);
     expect(new Orbit(true, 0.1).distance).toBeLessThanOrEqual(ORBIT_LIMITS.maxDistance);
   });
+
+  it('recovers from a NaN aspect, frame time or input instead of sticking at NaN', () => {
+    const fromBadAspect = new Orbit(false, NaN);
+    expect(fromBadAspect.distance).toBe(new Orbit(false, 1).distance);
+    expect(new Orbit(false, 0).distance).toBe(new Orbit(false, 1).distance);
+
+    const o = new Orbit(false, 4 / 3);
+    o.advance(NaN);
+    o.rotate(NaN, 1);
+    o.zoom(NaN);
+    o.zoom(0);
+    for (let n = 0; n < 200; n++) o.advance(1 / 60);
+    for (const v of [o.yaw, o.pitch, o.distance, o.opening, o.focusY, o.focusZ]) expect(Number.isFinite(v)).toBe(true);
+    expect(o.distance).toBeCloseTo(o.targetDistance, 3);
+
+    const poisoned = new Orbit(false, 4 / 3);
+    poisoned.distance = NaN; poisoned.opening = NaN;
+    poisoned.advance(1 / 60);
+    for (const v of [poisoned.yaw, poisoned.pitch, poisoned.distance]) expect(Number.isFinite(v)).toBe(true);
+  });
 });

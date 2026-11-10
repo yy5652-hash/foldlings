@@ -19,6 +19,8 @@ export function clampDistance(value: number): number {
   return Math.max(ORBIT_LIMITS.minDistance, Math.min(ORBIT_LIMITS.maxDistance, value));
 }
 
+const finite = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback);
+
 export function damp(current: number, target: number, delta: number): number {
   return current + (target - current) * (1 - Math.exp(-10 * Math.max(0, delta)));
 }
@@ -36,7 +38,9 @@ export class Orbit {
   focusZ = -0.03;
 
   constructor(reducedMotion: boolean, aspect = 1) {
-    this.distance = this.targetDistance = clampDistance(0.86 / Math.min(1, Math.max(0.4, aspect) / 0.9));
+    // A canvas that is still 0×0 when the page starts reports a NaN aspect.
+    const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+    this.distance = this.targetDistance = clampDistance(0.86 / Math.min(1, Math.max(0.4, a) / 0.9));
     if (reducedMotion) this.opening = 2.5;
     else { this.focusY = 0.24; this.focusZ = -0.08; }
   }
@@ -50,15 +54,26 @@ export class Orbit {
   }
 
   rotate(dx: number, dy: number) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
     this.targetYaw = clampYaw(this.targetYaw - dx * 0.006);
     this.targetPitch = clampPitch(this.targetPitch + dy * 0.006);
   }
 
   zoom(factor: number) {
+    if (!Number.isFinite(factor) || factor <= 0) return;
     this.targetDistance = clampDistance(this.targetDistance * factor);
   }
 
   advance(delta: number, reducedMotion = false) {
+    // A NaN frame time (first frame, hidden tab) would otherwise stick in every field forever.
+    delta = finite(delta, 0);
+    if (!Number.isFinite(this.yaw + this.pitch + this.distance + this.opening)) {
+      this.targetYaw = finite(this.targetYaw, 0);
+      this.targetPitch = finite(this.targetPitch, 40 * Math.PI / 180);
+      this.targetDistance = finite(this.targetDistance, 0.86);
+      this.yaw = this.targetYaw; this.pitch = this.targetPitch; this.distance = this.targetDistance;
+      this.opening = 2.5; this.focusY = 0.06; this.focusZ = -0.03;
+    }
     if (this.opening < 2.5 && !reducedMotion) {
       this.opening = Math.min(2.5, this.opening + Math.max(0, delta));
       const t = this.opening / 2.5;

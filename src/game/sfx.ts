@@ -138,6 +138,8 @@ export function setListener(pos: { x: number; y: number; z: number }, fwd: { x: 
   const a = ctx;
   if (!a) return;
   const l = a.listener;
+  // AudioParam throws on NaN/Infinity, which would stop the whole frame loop.
+  if (!Number.isFinite(pos.x + pos.y + pos.z + fwd.x + fwd.y + fwd.z)) return;
   if (l.positionX) {
     l.positionX.value = pos.x;
     l.positionY.value = pos.y;
